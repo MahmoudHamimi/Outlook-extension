@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Inbox Assistant for Outlook Web",
+  "version": "1.1.0",
+  "description": "Stale-email alerts, priority senders, manual folders, follow-up tracking, meeting extraction, tone checking, meeting cost estimates, and PDF export with sender info — all inside Outlook on the web.",
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://outlook.office.com/*",
+    "https://outlook.office365.com/*",
+    "https://outlook.live.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://outlook.office.com/*",
+        "https://outlook.office365.com/*",
+        "https://outlook.live.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}
