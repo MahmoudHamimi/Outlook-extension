@@ -54,8 +54,16 @@
     contactsReceivedStorageKey: "ia_contacts_received_v1",
     contactsSentStorageKey: "ia_contacts_sent_v1",
     costHistoryStorageKey: "ia_cost_history_v1",
-    // How many days an unread email can sit untouched before we flag it.
-    staleThresholdDays: 3
+    themeStorageKey: "ia_theme_v1",
+    snoozeStorageKey: "ia_stale_snoozes_v1",
+    staleDaysStorageKey: "ia_stale_days_v1",
+    // How many days an unread email can sit untouched before we flag it as
+    // stale. Priority senders get their own (shorter) threshold — see
+    // priorityStaleThresholdDays / ia_stale_priority_days_v1 below — because
+    // an important sender going quiet for 3 days is a bigger deal than a
+    // newsletter doing the same.
+    staleThresholdDays: 3,
+    priorityStaleThresholdDays: 1
   };
 
   /* ============================== UTIL ============================== */
@@ -196,18 +204,46 @@
     if (strong && strong.textContent.trim()) return strong.textContent.trim();
     return null;
   }
-  function priorityMatches(sender, prioritySenders) {
-    if (!sender || !prioritySenders || prioritySenders.length === 0) return false;
+  // Priority-sender entries are stored as { value, level } objects, where
+  // level is "high" or "normal". migratePriorityEntry() upgrades the old
+  // plain-string format (v1.3.0 and earlier) transparently the first time
+  // it's read, so nobody loses their existing list on update.
+  function migratePriorityEntry(entry) {
+    if (typeof entry === "string") return { value: entry, level: "normal" };
+    if (entry && typeof entry === "object" && entry.value) {
+      return { value: entry.value, level: entry.level === "high" ? "high" : "normal" };
+    }
+    return null;
+  }
+  function migratePriorityList(list) {
+    return (list || []).map(migratePriorityEntry).filter(Boolean);
+  }
+  // Returns the matching entry (so callers can read its level) or null.
+  // A leading "@" in a stored value (e.g. "@bigclient.com") matches any
+  // sender text containing that domain, which in practice flags every
+  // message from anyone at that company.
+  function priorityMatch(sender, prioritySenders) {
+    if (!sender || !prioritySenders || prioritySenders.length === 0) return null;
     const s = sender.toLowerCase();
-    return prioritySenders.some((p) => p && s.includes(p.toLowerCase()));
+    let best = null;
+    for (const p of prioritySenders) {
+      if (!p || !p.value) continue;
+      if (s.includes(p.value.toLowerCase())) {
+        if (p.level === "high") return p; // high always wins outright
+        if (!best) best = p;
+      }
+    }
+    return best;
   }
 
   /* ============================== SHARED STATE ============================== */
   // Declared up top (rather than inline in each section) so every section can
   // safely reference these regardless of which order the sections initialize in.
   let staleThresholdDays = CONFIG.staleThresholdDays;
-  let priorityCache = [];
-  let lastStaleItems = []; // [{subject, sender, ageDays}] from the most recent scan
+  let priorityStaleThresholdDays = CONFIG.priorityStaleThresholdDays;
+  let priorityCache = []; // [{value, level}]
+  let snoozeCache = {}; // { [uid]: isoExpiryString }
+  let lastStaleItems = []; // [{uid, subject, sender, ageDays, isPriority, level}] from the most recent scan
   let liveTimerInterval = null;
   let liveStartedAt = null;
   let liveElapsedBeforePause = 0;
@@ -219,37 +255,22 @@
   globalStyle.textContent = `
     .ia-row-badges { display:inline-flex; gap:4px; margin-left:8px; vertical-align:middle; }
     .ia-badge { display:inline-block; font-family:"Segoe UI",Arial,sans-serif; font-size:10px;
-      font-weight:700; padding:1px 7px; border-radius:8px; line-height:16px; white-space:nowrap; }
-    .ia-badge-stale { background:#FBE1DE; color:#B3261E; }
-    .ia-badge-priority {
-      background: linear-gradient(135deg,#FFF4CE,#FFDE85); color:#8A6D00;
-      box-shadow: 0 0 0 1px rgba(138,109,0,.25);
-      animation: ia-badge-pulse 2.2s ease-in-out infinite;
+      font-weight:600; padding:1px 7px; border-radius:4px; line-height:16px; white-space:nowrap;
+      letter-spacing:.1px; }
+    .ia-badge-stale { background:#FDECEA; color:#A32C1E; border:1px solid #F3C6BE; }
+    .ia-badge-stale-priority { background:#A32C1E; color:#fff; border:1px solid #A32C1E; }
+    .ia-badge-priority-normal { background:#EEF2FB; color:#24408E; border:1px solid #C8D3EE; }
+    .ia-badge-priority-high {
+      background:#24408E; color:#fff; border:1px solid #24408E;
+      animation: ia-badge-pulse 2.4s ease-in-out infinite;
     }
-    .ia-row-priority {
-      position: relative !important;
-      box-shadow: inset 3px 0 0 #B3261E !important;
-      background: linear-gradient(90deg, rgba(179,38,30,.07), rgba(255,222,133,.14) 45%, transparent 92%) !important;
-      animation: ia-priority-glow 2.8s ease-in-out infinite;
-    }
-    .ia-row-priority::before {
-      content: "★";
-      position: absolute; top: 2px; left: 3px; font-size: 9px; color: #B3261E;
-      text-shadow: 0 0 5px rgba(179,38,30,.55);
-      animation: ia-priority-star 1.9s ease-in-out infinite;
-      pointer-events: none; z-index: 5;
-    }
-    @keyframes ia-priority-glow {
-      0%, 100% { box-shadow: inset 3px 0 0 #B3261E; }
-      50% { box-shadow: inset 3px 0 0 #B3261E, inset 0 0 16px rgba(179,38,30,.22); }
-    }
-    @keyframes ia-priority-star {
-      0%, 100% { opacity: .5; transform: scale(1); }
-      50% { opacity: 1; transform: scale(1.3); }
-    }
+    /* Flat, business-style side accent instead of a glowing/pulsing wash —
+       a thin solid rail is enough signal without feeling like a toy. */
+    .ia-row-priority-normal { box-shadow: inset 3px 0 0 #6C86C4 !important; }
+    .ia-row-priority-high { box-shadow: inset 3px 0 0 #24408E !important; }
     @keyframes ia-badge-pulse {
-      0%, 100% { transform: scale(1); }
-      50% { transform: scale(1.06); }
+      0%, 100% { opacity: 1; }
+      50% { opacity: .72; }
     }
   `;
   document.documentElement.appendChild(globalStyle);
@@ -263,106 +284,167 @@
 
   shadow.innerHTML = `
     <style>
-      :host { all: initial; }
-      * { box-sizing: border-box; font-family: "Segoe UI", Arial, sans-serif; }
-      .toggle {
-        width: 54px; height: 54px; border-radius: 50%;
-        background: linear-gradient(135deg,#1B4F8C,#20B999); color:#fff;
-        border:none; cursor:pointer; box-shadow:0 4px 16px rgba(27,79,140,.45); font-size:14px;
-        font-weight:800; position:relative; display:flex; align-items:center; justify-content:center;
-        transition: transform .15s ease;
+      :host {
+        all: initial;
+        /* ---- Light theme (default) ---- */
+        --ia-bg: #FFFFFF;
+        --ia-surface: #F7F8FA;
+        --ia-surface-2: #EFF1F5;
+        --ia-border: #E0E3E9;
+        --ia-text: #1A1D24;
+        --ia-muted: #667085;
+        --ia-primary: #24408E;
+        --ia-primary-dark: #172B63;
+        --ia-primary-contrast: #FFFFFF;
+        --ia-primary-tint: #EEF2FB;
+        --ia-success-bg: #E7F5EC; --ia-success-text: #1E7A3D;
+        --ia-warn-bg: #FCEFDC; --ia-warn-text: #93590B;
+        --ia-danger-bg: #FDECEA; --ia-danger-text: #A32C1E;
+        --ia-shadow: 0 10px 28px rgba(20,26,40,.16);
+        --ia-shadow-sm: 0 1px 2px rgba(20,26,40,.06);
       }
-      .toggle:hover { transform:scale(1.06); }
+      :host([data-theme="dark"]) {
+        --ia-bg: #1B1E25;
+        --ia-surface: #21242C;
+        --ia-surface-2: #2A2E38;
+        --ia-border: #363B47;
+        --ia-text: #E7E9EE;
+        --ia-muted: #9AA1B0;
+        --ia-primary: #6E93E8;
+        --ia-primary-dark: #557AD1;
+        --ia-primary-contrast: #10131A;
+        --ia-primary-tint: #232B45;
+        --ia-success-bg: #17301F; --ia-success-text: #6FCB8C;
+        --ia-warn-bg: #3A2A10; --ia-warn-text: #E8AE5C;
+        --ia-danger-bg: #3A1E1B; --ia-danger-text: #F0897A;
+        --ia-shadow: 0 10px 28px rgba(0,0,0,.45);
+        --ia-shadow-sm: 0 1px 2px rgba(0,0,0,.3);
+      }
+      * { box-sizing: border-box; font-family: "Segoe UI", -apple-system, "Inter", Arial, sans-serif; }
+      .toggle {
+        width: 50px; height: 50px; border-radius: 50%;
+        background: var(--ia-primary); color: var(--ia-primary-contrast);
+        border:none; cursor:pointer; box-shadow: var(--ia-shadow); font-size:12px;
+        font-weight:700; position:relative; display:flex; align-items:center; justify-content:center;
+        transition: transform .12s ease, background .2s ease; letter-spacing:.3px;
+      }
+      .toggle:hover { transform:scale(1.05); background: var(--ia-primary-dark); }
       .toggle-badge {
-        position:absolute; top:-4px; right:-4px; background:#B3261E; color:#fff; border-radius:10px;
-        min-width:18px; height:18px; display:none; align-items:center; justify-content:center;
-        font-size:10px; font-weight:700; padding:0 4px; box-shadow:0 0 0 2px #fff;
+        position:absolute; top:-3px; right:-3px; background: var(--ia-danger-text); color:#fff; border-radius:9px;
+        min-width:17px; height:17px; display:none; align-items:center; justify-content:center;
+        font-size:9.5px; font-weight:700; padding:0 4px; box-shadow:0 0 0 2px var(--ia-bg);
       }
       .panel {
-        display:none; position:fixed; bottom:84px; right:20px; width:390px; max-height:78vh;
-        background:#fff; border-radius:14px; box-shadow:0 10px 34px rgba(20,30,50,.28);
-        overflow:hidden; flex-direction:column; border:1px solid #E1E5EA;
+        display:none; position:fixed; bottom:80px; right:20px; width:396px; max-height:78vh;
+        background: var(--ia-bg); border-radius:10px; box-shadow: var(--ia-shadow);
+        overflow:hidden; flex-direction:column; border:1px solid var(--ia-border); color: var(--ia-text);
       }
       .panel.open { display:flex; }
-      header { background: linear-gradient(135deg,#1B4F8C 0%, #2F6FB0 55%, #20B999 100%); color:#fff; padding:13px 15px; }
-      header h1 { margin:0; font-size:15px; letter-spacing:.2px; }
-      header p { margin:2px 0 0; font-size:10.5px; opacity:.9; }
-      nav { display:flex; flex-wrap:wrap; background:#fff; border-bottom:1px solid #E1E5EA; }
+      header {
+        background: var(--ia-primary); color: var(--ia-primary-contrast);
+        padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:8px;
+      }
+      header h1 { margin:0; font-size:14px; font-weight:700; letter-spacing:.1px; }
+      header p { margin:1px 0 0; font-size:10px; opacity:.85; }
+      .theme-toggle {
+        all:initial; cursor:pointer; font-family:inherit; width:26px; height:26px; border-radius:6px;
+        display:flex; align-items:center; justify-content:center; font-size:13px;
+        background: rgba(255,255,255,.14); color: var(--ia-primary-contrast); flex-shrink:0;
+        transition: background .15s ease;
+      }
+      .theme-toggle:hover { background: rgba(255,255,255,.26); }
+      nav { display:flex; flex-wrap:wrap; background: var(--ia-surface); border-bottom:1px solid var(--ia-border); }
       nav button {
         flex:1 1 25%; border:none; background:none; padding:7px 2px 6px; font-size:9.5px; cursor:pointer;
-        color:#5B6472; border-bottom:3px solid transparent; white-space:nowrap;
-        display:flex; flex-direction:column; align-items:center; gap:1px;
+        color: var(--ia-muted); border-bottom:2px solid transparent; white-space:nowrap;
+        display:flex; flex-direction:column; align-items:center; gap:1px; font-family:inherit;
+        transition: color .12s ease, border-color .12s ease;
       }
-      nav button .nav-icon { font-size:14px; line-height:1; }
-      nav button.active { color:#1B4F8C; border-bottom-color:#1B4F8C; font-weight:700; background:#F5F8FC; }
-      main { padding:12px 14px; overflow-y:auto; font-size:12.5px; color:#20242B; }
+      nav button .nav-icon { font-size:13px; line-height:1; }
+      nav button.active { color: var(--ia-primary); border-bottom-color: var(--ia-primary); font-weight:700; background: var(--ia-bg); }
+      main { padding:12px 14px; overflow-y:auto; font-size:12.5px; color: var(--ia-text); background: var(--ia-bg); }
       section { display:none; }
       section.active { display:block; }
-      h2 { font-size:12.5px; margin:0 0 6px; }
-      .muted { color:#5B6472; font-size:11px; line-height:1.5; }
-      label { display:block; font-size:11px; font-weight:600; margin:8px 0 3px; }
+      h2 { font-size:12px; margin:0 0 6px; font-weight:700; color: var(--ia-text); text-transform:uppercase; letter-spacing:.3px; opacity:.85; }
+      .muted { color: var(--ia-muted); font-size:11px; line-height:1.5; }
+      label { display:block; font-size:11px; font-weight:600; margin:8px 0 3px; color: var(--ia-text); }
       input, select {
-        width:100%; padding:5px 7px; border:1px solid #E1E5EA; border-radius:6px; font-size:12px;
+        width:100%; padding:5px 7px; border:1px solid var(--ia-border); border-radius:5px; font-size:12px;
+        background: var(--ia-bg); color: var(--ia-text); font-family:inherit;
       }
+      input:focus, select:focus { outline:2px solid var(--ia-primary-tint); border-color: var(--ia-primary); }
       button.primary {
-        background: linear-gradient(135deg,#1B4F8C,#2F8FD1); color:#fff; border:none; border-radius:7px;
+        background: var(--ia-primary); color: var(--ia-primary-contrast); border:none; border-radius:6px;
         padding:7px 12px; font-size:11.5px; font-weight:600; cursor:pointer; margin-top:7px;
-        box-shadow:0 2px 6px rgba(27,79,140,.25); transition: transform .1s ease;
+        box-shadow: var(--ia-shadow-sm); transition: background .12s ease; font-family:inherit;
       }
-      button.primary:hover { transform:translateY(-1px); }
+      button.primary:hover { background: var(--ia-primary-dark); }
       button.secondary {
-        background:#fff; color:#1B4F8C; border:1px solid #C9D6E8; border-radius:7px; padding:5px 10px;
-        font-size:10.5px; cursor:pointer; margin-right:6px; margin-top:5px; font-weight:600;
+        background: var(--ia-bg); color: var(--ia-primary); border:1px solid var(--ia-border); border-radius:6px; padding:5px 10px;
+        font-size:10.5px; cursor:pointer; margin-right:6px; margin-top:5px; font-weight:600; font-family:inherit;
       }
-      button.secondary:hover { background:#EDF1F7; }
-      .item { border:1px solid #E1E5EA; border-radius:8px; padding:7px 8px; margin-bottom:7px; }
-      .pill { display:inline-block; padding:2px 7px; border-radius:9px; font-size:10px; font-weight:600; }
-      .pill.warn { background:#FCE9DA; color:#B26A00; }
-      .pill.ok { background:#E4F3E5; color:#2E7D32; }
-      .pill.due { background:#FBE1DE; color:#B3261E; }
-      .empty { color:#5B6472; font-style:italic; font-size:11px; }
+      button.secondary:hover { background: var(--ia-surface-2); }
+      button.secondary.danger { color: var(--ia-danger-text); }
+      .item { border:1px solid var(--ia-border); border-radius:7px; padding:7px 8px; margin-bottom:7px; background: var(--ia-surface); }
+      .pill { display:inline-block; padding:2px 7px; border-radius:4px; font-size:10px; font-weight:700; letter-spacing:.1px; }
+      .pill.warn { background: var(--ia-warn-bg); color: var(--ia-warn-text); }
+      .pill.ok { background: var(--ia-success-bg); color: var(--ia-success-text); }
+      .pill.due { background: var(--ia-danger-bg); color: var(--ia-danger-text); }
+      .pill.high { background: var(--ia-primary); color: var(--ia-primary-contrast); }
+      .pill.normal { background: var(--ia-primary-tint); color: var(--ia-primary); }
+      .empty { color: var(--ia-muted); font-style:italic; font-size:11px; }
       .warning-list { margin:0; padding-left:16px; }
       .warning-list li { margin-bottom:5px; }
       .row-flex { display:flex; gap:6px; align-items:flex-end; }
       .row-flex input, .row-flex select { flex:1; }
       .tag-list { list-style:none; margin:8px 0 0; padding:0; }
       .tag-list li {
-        display:flex; justify-content:space-between; align-items:center;
-        border:1px solid #E1E5EA; border-radius:6px; padding:5px 8px; margin-bottom:5px; font-size:11.5px;
+        display:flex; justify-content:space-between; align-items:center; gap:6px;
+        border:1px solid var(--ia-border); border-radius:6px; padding:5px 8px; margin-bottom:5px; font-size:11.5px;
+        background: var(--ia-surface);
       }
-      .tag-list button { background:none; border:none; color:#B3261E; cursor:pointer; font-size:11px; }
+      .tag-list li .tag-left { display:flex; align-items:center; gap:6px; overflow:hidden; }
+      .tag-list li .tag-left span.name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .tag-list button { background:none; border:none; color: var(--ia-danger-text); cursor:pointer; font-size:11px; font-family:inherit; flex-shrink:0; }
       .stat-card {
-        background: linear-gradient(135deg,#EDF1F7,#F5F8FC); border:1px solid #E1E5EA; border-radius:10px;
+        background: var(--ia-surface); border:1px solid var(--ia-border); border-radius:8px;
         padding:12px 14px; margin-top:8px; text-align:center;
       }
-      .stat-big {
-        font-size:26px; font-weight:800; background: linear-gradient(135deg,#1B4F8C,#20B999);
-        -webkit-background-clip:text; background-clip:text; color:#1B4F8C;
-      }
-      @supports (-webkit-background-clip:text) { .stat-big { color:transparent; } }
+      .stat-big { font-size:24px; font-weight:800; color: var(--ia-primary); }
       .donut-row { display:flex; gap:14px; align-items:center; }
       .donut-legend { list-style:none; margin:0; padding:0; font-size:11px; flex:1; }
-      .donut-legend li { display:flex; align-items:center; gap:6px; margin-bottom:4px; }
-      .dot { width:9px; height:9px; border-radius:50%; display:inline-block; flex-shrink:0; }
-      details.contact-full-list { margin-top:10px; border:1px solid #E1E5EA; border-radius:8px; }
+      .donut-legend li { display:flex; align-items:center; gap:6px; margin-bottom:4px; color: var(--ia-text); }
+      .dot { width:9px; height:9px; border-radius:2px; display:inline-block; flex-shrink:0; }
+      details.contact-full-list { margin-top:10px; border:1px solid var(--ia-border); border-radius:7px; }
       details.contact-full-list summary {
-        cursor:pointer; padding:7px 9px; font-size:11px; font-weight:600; color:#1B4F8C; list-style:none;
+        cursor:pointer; padding:7px 9px; font-size:11px; font-weight:600; color: var(--ia-primary); list-style:none;
       }
       details.contact-full-list summary::-webkit-details-marker { display:none; }
       ul.contact-full-list-items {
         list-style:none; margin:0; padding:0 9px 9px; max-height:180px; overflow-y:auto;
       }
       ul.contact-full-list-items li {
-        display:flex; justify-content:space-between; font-size:11px; padding:4px 0; border-top:1px solid #F0F2F5;
+        display:flex; justify-content:space-between; font-size:11px; padding:4px 0; border-top:1px solid var(--ia-border); color: var(--ia-text);
       }
       ul.contact-full-list-items li:first-child { border-top:none; }
+      .field-hint { font-size:10px; color: var(--ia-muted); margin-top:3px; line-height:1.4; }
+      .stat-inline { display:flex; gap:8px; margin:6px 0 2px; }
+      .stat-inline .chip {
+        flex:1; text-align:center; background: var(--ia-surface); border:1px solid var(--ia-border);
+        border-radius:6px; padding:6px 4px;
+      }
+      .stat-inline .chip b { display:block; font-size:15px; color: var(--ia-primary); }
+      .stat-inline .chip span { font-size:9.5px; color: var(--ia-muted); }
     </style>
     <button class="toggle" id="ia-toggle" title="Inbox Assistant">
       <span>IA</span>
       <span class="toggle-badge" id="ia-toggle-badge">0</span>
     </button>
     <div class="panel" id="ia-panel">
-      <header><h1>Inbox Assistant</h1><p>Smart tools for your inbox</p></header>
+      <header>
+        <div><h1>Inbox Assistant</h1><p>Smart tools for your inbox</p></div>
+        <button class="theme-toggle" id="ia-theme-toggle" title="Toggle light / dark theme">◐</button>
+      </header>
       <nav id="ia-tabs">
         <button data-tab="followup" class="active"><span class="nav-icon">📌</span>Follow-ups</button>
         <button data-tab="stale"><span class="nav-icon">⏰</span>Stale</button>
@@ -385,27 +467,49 @@
         </section>
 
         <section id="tab-stale">
-          <h2>Unopened &gt; <span id="ia-stale-threshold-label">3</span> days</h2>
+          <h2>Unopened &gt; threshold</h2>
           <p class="muted">Automatically scans the message list and flags any unread email that's sat unopened past the threshold — look for the <span class="pill due">⏰ Nd</span> badge directly on the row. Opening the email clears its badge right away.</p>
+          <div class="stat-inline">
+            <div class="chip"><b id="ia-stale-count">0</b><span>flagged now</span></div>
+            <div class="chip"><b id="ia-stale-priority-count">0</b><span>are priority</span></div>
+            <div class="chip"><b id="ia-stale-snoozed-count">0</b><span>snoozed</span></div>
+          </div>
           <label>Flag unread emails older than (days)</label>
           <div class="row-flex">
             <input type="number" id="ia-stale-days" min="1" max="60" value="3" />
             <button class="primary" id="ia-stale-save" style="margin-top:0;">Save</button>
           </div>
-          <h2 style="margin-top:14px;">Currently flagged (<span id="ia-stale-count">0</span>)</h2>
+          <label>Flag priority senders sooner, after (days)</label>
+          <div class="row-flex">
+            <input type="number" id="ia-stale-priority-days" min="0" max="60" value="1" />
+            <button class="primary" id="ia-stale-priority-save" style="margin-top:0;">Save</button>
+          </div>
+          <p class="field-hint">Applies only to senders on your Priority list — everyone else still uses the threshold above.</p>
+          <h2 style="margin-top:14px;">Currently flagged (<span id="ia-stale-count-2">0</span>)</h2>
           <div id="ia-stale-list"><p class="empty">Nothing flagged in the visible list right now.</p></div>
           <button class="secondary" id="ia-stale-rescan">Rescan visible list</button>
+          <button class="secondary" id="ia-stale-clear-snoozes">Clear all snoozes</button>
         </section>
 
         <section id="tab-priority">
           <h2>Priority senders</h2>
-          <p class="muted">Emails from these senders get a <span class="pill warn">★ Priority</span> badge and a red side-accent directly in the message list, automatically.</p>
-          <label>Add sender (name or email)</label>
+          <p class="muted">Emails from these senders get a badge and a side-accent directly in the message list, automatically, and are flagged as stale sooner. Start a value with <b>@</b> (e.g. <code>@bigclient.com</code>) to match everyone at that domain.</p>
+          <div class="stat-inline">
+            <div class="chip"><b id="ia-priority-total">0</b><span>senders tracked</span></div>
+            <div class="chip"><b id="ia-priority-visible">0</b><span>in current view</span></div>
+          </div>
+          <label>Add sender (name, email, or @domain.com)</label>
           <div class="row-flex">
             <input type="text" id="ia-priority-input" placeholder="e.g. jane@company.com" />
+            <select id="ia-priority-level" style="flex:0 0 92px;">
+              <option value="normal" selected>Normal</option>
+              <option value="high">High</option>
+            </select>
             <button class="primary" id="ia-priority-add" style="margin-top:0;">Add</button>
           </div>
           <button class="secondary" id="ia-priority-add-current">Add sender of open email</button>
+          <label style="margin-top:12px;">Filter list</label>
+          <input type="text" id="ia-priority-search" placeholder="Search priority senders…" />
           <ul class="tag-list" id="ia-priority-list"><li class="empty" style="border:none;">No priority senders yet.</li></ul>
         </section>
 
@@ -510,6 +614,28 @@
   $("#ia-toggle").addEventListener("click", () => {
     $("#ia-panel").classList.toggle("open");
   });
+
+  /* ---- Theme (light / dark) ----
+     Defaults to the OS/browser preference the first time the extension
+     runs, then remembers whatever the person picks via the header toggle. */
+  function applyTheme(theme) {
+    host.setAttribute("data-theme", theme);
+    const btn = $("#ia-theme-toggle");
+    if (btn) btn.textContent = theme === "dark" ? "☀" : "☾";
+  }
+  async function loadTheme() {
+    const stored = await storageGet(CONFIG.themeStorageKey);
+    const theme = stored || (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    applyTheme(theme);
+  }
+  $("#ia-theme-toggle").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const current = host.getAttribute("data-theme") === "dark" ? "dark" : "light";
+    const next = current === "dark" ? "light" : "dark";
+    applyTheme(next);
+    await storageSet(CONFIG.themeStorageKey, next);
+  });
+  loadTheme();
 
   shadow.querySelectorAll("#ia-tabs button").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -651,39 +777,72 @@
      doing.
      ========================================================= */
   async function loadStaleThreshold() {
-    const stored = await storageGet("ia_stale_days_v1");
-    staleThresholdDays = stored || CONFIG.staleThresholdDays;
+    const stored = await storageGet(CONFIG.staleDaysStorageKey);
+    staleThresholdDays = stored != null ? stored : CONFIG.staleThresholdDays;
     $("#ia-stale-days").value = staleThresholdDays;
-    $("#ia-stale-threshold-label").textContent = staleThresholdDays;
+    const storedPriority = await storageGet("ia_stale_priority_days_v1");
+    priorityStaleThresholdDays = storedPriority != null ? storedPriority : CONFIG.priorityStaleThresholdDays;
+    $("#ia-stale-priority-days").value = priorityStaleThresholdDays;
   }
   async function refreshPriorityCache() {
-    priorityCache = (await storageGet(CONFIG.priorityStorageKey)) || [];
+    priorityCache = migratePriorityList(await storageGet(CONFIG.priorityStorageKey));
+  }
+  async function refreshSnoozeCache() {
+    const stored = (await storageGet(CONFIG.snoozeStorageKey)) || {};
+    const now = Date.now();
+    // Drop anything that already expired so the stored object doesn't grow forever.
+    const live = {};
+    Object.keys(stored).forEach((uid) => {
+      if (new Date(stored[uid]).getTime() > now) live[uid] = stored[uid];
+    });
+    snoozeCache = live;
+    if (Object.keys(live).length !== Object.keys(stored).length) {
+      await storageSet(CONFIG.snoozeStorageKey, live);
+    }
+  }
+  async function snoozeItem(uid, hours = 24) {
+    if (!uid) return;
+    const expiry = new Date(Date.now() + hours * 3600000).toISOString();
+    snoozeCache[uid] = expiry;
+    await storageSet(CONFIG.snoozeStorageKey, snoozeCache);
+    scanMailList();
   }
 
   function applyRowSignals(row) {
     const old = row.querySelector(".ia-row-badges");
     if (old) old.remove();
-    row.classList.remove("ia-row-priority");
+    row.classList.remove("ia-row-priority-normal", "ia-row-priority-high");
 
     const unread = isRowUnread(row);
     const date = findRowDate(row);
     const sender = findRowSender(row);
+    const match = priorityMatch(sender, priorityCache);
+    const uid = rowUniqueId(row);
+    const isSnoozed = uid && snoozeCache[uid] && new Date(snoozeCache[uid]).getTime() > Date.now();
     const badges = [];
 
-    if (unread && date) {
+    if (unread && date && !isSnoozed) {
       const ageDays = Math.floor((Date.now() - date.getTime()) / 86400000);
-      if (ageDays >= staleThresholdDays) {
-        badges.push(`<span class="ia-badge ia-badge-stale" title="Unopened for ${ageDays} day(s)">⏰ ${ageDays}d</span>`);
+      const threshold = match ? Math.min(staleThresholdDays, priorityStaleThresholdDays) : staleThresholdDays;
+      if (ageDays >= threshold) {
+        const badgeClass = match ? "ia-badge-stale-priority" : "ia-badge-stale";
+        const title = match ? `Priority sender, unopened for ${ageDays} day(s)` : `Unopened for ${ageDays} day(s)`;
+        badges.push(`<span class="ia-badge ${badgeClass}" title="${title}">⏰ ${ageDays}d</span>`);
         lastStaleItems.push({
+          uid,
           subject: (row.getAttribute("aria-label") || "").split(",")[0] || "(email)",
           sender: sender || "(unknown sender)",
-          ageDays
+          ageDays,
+          isPriority: !!match,
+          level: match ? match.level : null
         });
       }
     }
-    if (priorityMatches(sender, priorityCache)) {
-      badges.push('<span class="ia-badge ia-badge-priority" title="Priority sender">★ Priority</span>');
-      row.classList.add("ia-row-priority");
+    if (match) {
+      const badgeClass = match.level === "high" ? "ia-badge-priority-high" : "ia-badge-priority-normal";
+      const label = match.level === "high" ? "🔺 Urgent" : "★ Priority";
+      badges.push(`<span class="ia-badge ${badgeClass}" title="Priority sender (${match.level})">${label}</span>`);
+      row.classList.add(match.level === "high" ? "ia-row-priority-high" : "ia-row-priority-normal");
     }
     if (badges.length) {
       const wrap = document.createElement("span");
@@ -703,22 +862,39 @@
 
   function renderStaleTab() {
     const countEl = $("#ia-stale-count");
+    const countEl2 = $("#ia-stale-count-2");
+    const priorityCountEl = $("#ia-stale-priority-count");
+    const snoozedCountEl = $("#ia-stale-snoozed-count");
     const listEl = $("#ia-stale-list");
     if (countEl && listEl) {
       countEl.textContent = lastStaleItems.length;
+      if (countEl2) countEl2.textContent = lastStaleItems.length;
+      if (priorityCountEl) priorityCountEl.textContent = lastStaleItems.filter((i) => i.isPriority).length;
+      if (snoozedCountEl) snoozedCountEl.textContent = Object.keys(snoozeCache).length;
       if (lastStaleItems.length === 0) {
         listEl.innerHTML = '<p class="empty">Nothing flagged in the visible list right now.</p>';
       } else {
+        // Priority-flagged stale emails float to the top; ties broken by age.
         listEl.innerHTML = lastStaleItems
-          .sort((a, b) => b.ageDays - a.ageDays)
-          .map(
-            (it) => `
-          <div class="item">
+          .sort((a, b) => (b.isPriority - a.isPriority) || (b.ageDays - a.ageDays))
+          .map((it, i) => {
+            const pill = it.isPriority
+              ? `<span class="pill due">🔥 ${it.ageDays}d &middot; priority</span>`
+              : `<span class="pill due">${it.ageDays}d unopened</span>`;
+            return `
+          <div class="item" data-uid="${escapeHtml(it.uid || "")}" data-idx="${i}">
             <strong style="font-size:11.5px;">${escapeHtml(it.subject).slice(0, 60)}</strong>
-            <div class="muted">${escapeHtml(it.sender)} &middot; <span class="pill due">${it.ageDays}d unopened</span></div>
-          </div>`
-          )
+            <div class="muted">${escapeHtml(it.sender)} &middot; ${pill}</div>
+            ${it.uid ? '<button class="secondary" data-action="snooze">Snooze 1 day</button>' : ""}
+          </div>`;
+          })
           .join("");
+        listEl.querySelectorAll('[data-action="snooze"]').forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const uid = btn.closest(".item").dataset.uid;
+            snoozeItem(uid, 24);
+          });
+        });
       }
     }
     updateToggleBadge();
@@ -738,7 +914,7 @@
     attributes: true,
     attributeFilter: ["aria-label", "class", "title"]
   });
-  loadStaleThreshold().then(() => refreshPriorityCache().then(scanMailList));
+  loadStaleThreshold().then(() => refreshSnoozeCache().then(() => refreshPriorityCache().then(scanMailList)));
   // OWA re-renders on its own, but a row's age can cross the threshold with no
   // DOM change at all (time just passes), so also re-check periodically.
   setInterval(scanMailList, 5 * 60 * 1000);
@@ -762,32 +938,68 @@
   $("#ia-stale-save").addEventListener("click", async () => {
     const days = Math.max(1, parseInt($("#ia-stale-days").value, 10) || 3);
     staleThresholdDays = days;
-    await storageSet("ia_stale_days_v1", days);
-    $("#ia-stale-threshold-label").textContent = days;
+    await storageSet(CONFIG.staleDaysStorageKey, days);
+    scanMailList();
+  });
+  $("#ia-stale-priority-save").addEventListener("click", async () => {
+    const days = Math.max(0, parseInt($("#ia-stale-priority-days").value, 10) || 0);
+    priorityStaleThresholdDays = days;
+    await storageSet("ia_stale_priority_days_v1", days);
     scanMailList();
   });
   $("#ia-stale-rescan").addEventListener("click", scanMailList);
+  $("#ia-stale-clear-snoozes").addEventListener("click", async () => {
+    snoozeCache = {};
+    await storageSet(CONFIG.snoozeStorageKey, snoozeCache);
+    scanMailList();
+  });
 
   /* =========================================================
      1c) PRIORITY SENDERS
      ========================================================= */
   async function getPrioritySenders() {
-    return (await storageGet(CONFIG.priorityStorageKey)) || [];
+    return migratePriorityList(await storageGet(CONFIG.priorityStorageKey));
   }
   async function savePrioritySenders(list) {
     await storageSet(CONFIG.priorityStorageKey, list);
     await refreshPriorityCache();
     scanMailList();
   }
+  async function countPriorityInView() {
+    const container = qFirst(CONFIG.mailListContainerSelectors) || document.body;
+    const rows = qAllVisible(CONFIG.mailListItemSelectors, container);
+    return rows.filter((r) => priorityMatch(findRowSender(r), priorityCache)).length;
+  }
   async function renderPriorityList() {
     const list = await getPrioritySenders();
     const el = $("#ia-priority-list");
+    const totalEl = $("#ia-priority-total");
+    const visibleEl = $("#ia-priority-visible");
+    if (totalEl) totalEl.textContent = list.length;
+    if (visibleEl) visibleEl.textContent = await countPriorityInView();
+
+    const filter = ($("#ia-priority-search") ? $("#ia-priority-search").value : "").trim().toLowerCase();
+    // High priority first, then alphabetically within each level.
+    const sorted = list
+      .map((s, i) => ({ ...s, i }))
+      .filter((s) => !filter || s.value.toLowerCase().includes(filter))
+      .sort((a, b) => (b.level === "high") - (a.level === "high") || a.value.localeCompare(b.value));
+
     if (list.length === 0) {
       el.innerHTML = '<li class="empty" style="border:none;">No priority senders yet.</li>';
       return;
     }
-    el.innerHTML = list
-      .map((s, i) => `<li data-i="${i}"><span>${escapeHtml(s)}</span><button data-action="remove">Remove</button></li>`)
+    if (sorted.length === 0) {
+      el.innerHTML = '<li class="empty" style="border:none;">No senders match that search.</li>';
+      return;
+    }
+    el.innerHTML = sorted
+      .map(
+        (s) => `<li data-i="${s.i}">
+          <span class="tag-left"><span class="pill ${s.level}">${s.level === "high" ? "High" : "Normal"}</span><span class="name">${escapeHtml(s.value)}</span></span>
+          <button data-action="remove">Remove</button>
+        </li>`
+      )
       .join("");
     el.querySelectorAll("li").forEach((li) => {
       const i = parseInt(li.dataset.i, 10);
@@ -801,25 +1013,32 @@
       });
     });
   }
-  async function addPrioritySender(value) {
+  async function addPrioritySender(value, level) {
     const v = (value || "").trim();
     if (!v) return;
+    const lvl = level === "high" ? "high" : "normal";
     const cur = await getPrioritySenders();
-    if (cur.some((s) => s.toLowerCase() === v.toLowerCase())) return;
-    cur.push(v);
+    const existingIdx = cur.findIndex((s) => s.value.toLowerCase() === v.toLowerCase());
+    if (existingIdx >= 0) {
+      cur[existingIdx].level = lvl; // re-adding an existing sender updates their level
+    } else {
+      cur.push({ value: v, level: lvl });
+    }
     await savePrioritySenders(cur);
     renderPriorityList();
   }
   $("#ia-priority-add").addEventListener("click", () => {
     const input = $("#ia-priority-input");
-    addPrioritySender(input.value);
+    const level = $("#ia-priority-level").value;
+    addPrioritySender(input.value, level);
     input.value = "";
   });
   $("#ia-priority-add-current").addEventListener("click", () => {
     const info = currentEmailInfo();
     if (!info || info.sender === "(sender not found)") return;
-    addPrioritySender(info.sender);
+    addPrioritySender(info.sender, $("#ia-priority-level").value);
   });
+  $("#ia-priority-search").addEventListener("input", () => renderPriorityList());
   renderPriorityList();
 
   /* =========================================================
@@ -830,7 +1049,7 @@
      scanning for a fuller picture). Rendered as pure-SVG donut
      charts (a stroke-dasharray ring trick) with no charting library.
      ========================================================= */
-  const DONUT_COLORS = ["#1B4F8C", "#20B999", "#E8A33D", "#B3261E", "#6C3FBF", "#2F8FD1", "#8A6D00", "#5B6472"];
+  const DONUT_COLORS = ["#24408E", "#2C8C7A", "#C77F1E", "#A32C1E", "#6C4FBF", "#4E7AC7", "#93590B", "#667085"];
 
   function detectFolderContext() {
     const path = window.location.pathname.toLowerCase();
@@ -910,11 +1129,17 @@
         return seg;
       })
       .join("");
+    // Center hole/text colors follow the current theme so the donut doesn't
+    // show a bright white disc in the middle of a dark panel.
+    const isDark = host.getAttribute("data-theme") === "dark";
+    const holeColor = isDark ? "#21242C" : "#fff";
+    const textColor = isDark ? "#E7E9EE" : "#1A1D24";
+    const subTextColor = isDark ? "#9AA1B0" : "#667085";
     return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
       <g transform="rotate(-90 ${cx} ${cy})">${circles}</g>
-      <circle cx="${cx}" cy="${cy}" r="${r - thickness / 2 - 3}" fill="#fff"></circle>
-      <text x="${cx}" y="${cy - 3}" text-anchor="middle" font-size="16" font-weight="800" fill="#20242B">${total}</text>
-      <text x="${cx}" y="${cy + 13}" text-anchor="middle" font-size="8.5" fill="#5B6472">emails</text>
+      <circle cx="${cx}" cy="${cy}" r="${r - thickness / 2 - 3}" fill="${holeColor}"></circle>
+      <text x="${cx}" y="${cy - 3}" text-anchor="middle" font-size="16" font-weight="800" fill="${textColor}">${total}</text>
+      <text x="${cx}" y="${cy + 13}" text-anchor="middle" font-size="8.5" fill="${subTextColor}">emails</text>
     </svg>`;
   }
 
@@ -1155,19 +1380,19 @@
   * { box-sizing: border-box; }
   html, body { margin:0; padding:0; background:#fff; }
   body { font-family: "Segoe UI", Arial, sans-serif; color:#20242B; }
-  .ia-topbar { height:6px; background: linear-gradient(90deg,#1B4F8C,#2F8FD1 50%,#20B999); }
+  .ia-topbar { height:5px; background:#24408E; }
   .ia-doc { max-width:720px; margin:0 auto; padding:34px 40px 54px; }
   .ia-brand {
     display:flex; align-items:center; gap:7px; font-size:10.5px; letter-spacing:.09em;
     text-transform:uppercase; color:#8892A0; font-weight:700; margin-bottom:20px;
   }
-  .ia-brand .dot { width:6px; height:6px; border-radius:50%; background:#20B999; display:inline-block; }
+  .ia-brand .dot { width:6px; height:6px; border-radius:50%; background:#24408E; display:inline-block; }
   h1.ia-subject {
     font-family: Georgia, "Times New Roman", serif; font-size:24px; line-height:1.32;
     margin:0 0 18px; color:#151A22; font-weight:700;
   }
   .ia-meta-card {
-    background:#F5F8FC; border:1px solid #E1E5EA; border-left:3px solid #1B4F8C;
+    background:#F5F8FC; border:1px solid #E1E5EA; border-left:3px solid #24408E;
     border-radius:6px; padding:12px 16px; margin-bottom:28px; font-size:12px; color:#4B5563;
   }
   .ia-meta-card div { margin:2px 0; }
@@ -1402,23 +1627,23 @@
     wrap.innerHTML =
       SCHEDULE_PRESETS.map(
         (p) =>
-          `<button data-preset="${p.id}" style="all:initial; cursor:pointer; font-family:inherit; font-size:11px; font-weight:600; color:#1B4F8C; background:#EDF1F7; border:1px solid #C9D6E8; border-radius:12px; padding:4px 10px;">🗓️ ${p.label}</button>`
+          `<button data-preset="${p.id}" style="all:initial; cursor:pointer; font-family:inherit; font-size:11px; font-weight:600; color:#24408E; background:#EEF2FB; border:1px solid #C8D3EE; border-radius:6px; padding:4px 10px;">🗓️ ${p.label}</button>`
       ).join("") +
-      `<button data-preset="custom" style="all:initial; cursor:pointer; font-family:inherit; font-size:11px; font-weight:600; color:#1B4F8C; background:#fff; border:1px dashed #1B4F8C; border-radius:12px; padding:4px 10px;">⏱️ Custom…</button>`;
+      `<button data-preset="custom" style="all:initial; cursor:pointer; font-family:inherit; font-size:11px; font-weight:600; color:#24408E; background:#fff; border:1px dashed #24408E; border-radius:6px; padding:4px 10px;">⏱️ Custom…</button>`;
 
     // Any date + any minute-precision time — not limited to the three presets.
     const customPanel = document.createElement("span");
     customPanel.style.cssText =
       "all:initial; display:none; align-items:center; gap:6px; margin-top:6px; font-family:'Segoe UI',Arial,sans-serif;";
     customPanel.innerHTML = `
-      <input type="date" min="${todayStr}" style="all:revert; font-size:11px; padding:3px 5px; border:1px solid #C9D6E8; border-radius:5px;" />
-      <input type="time" step="60" style="all:revert; font-size:11px; padding:3px 5px; border:1px solid #C9D6E8; border-radius:5px;" />
-      <button style="all:initial; cursor:pointer; font-family:inherit; font-size:11px; font-weight:600; color:#fff; background:#1B4F8C; border-radius:12px; padding:4px 10px;">Go</button>
+      <input type="date" min="${todayStr}" style="all:revert; font-size:11px; padding:3px 5px; border:1px solid #C8D3EE; border-radius:5px;" />
+      <input type="time" step="60" style="all:revert; font-size:11px; padding:3px 5px; border:1px solid #C8D3EE; border-radius:5px;" />
+      <button style="all:initial; cursor:pointer; font-family:inherit; font-size:11px; font-weight:600; color:#fff; background:#24408E; border-radius:6px; padding:4px 10px;">Go</button>
     `;
 
     const status = document.createElement("span");
     status.style.cssText =
-      "all:initial; display:block; font-family:'Segoe UI',Arial,sans-serif; font-size:10.5px; color:#5B6472; margin-top:4px; max-width:320px;";
+      "all:initial; display:block; font-family:'Segoe UI',Arial,sans-serif; font-size:10.5px; color:#667085; margin-top:4px; max-width:320px;";
     container.appendChild(wrap);
     container.appendChild(document.createElement("br"));
     container.appendChild(customPanel);

@@ -6,13 +6,15 @@ button appears in the bottom-right corner of the inbox (with a red count
 badge when something needs attention); click it to open the panel with all
 seven tools:
 
-1. **Stale-email signals (automatic)** — continuously scans the visible message list and stamps a `⏰ Nd` badge directly onto any unread row that's sat unopened longer than the threshold (default 3 days, configurable in the "Stale" tab). No click required. Opening the email clears its badge right away — see "Recent fixes" below for why this used to lag.
-2. **Priority senders (automatic)** — add a sender's name or email in the "Priority" tab (or one-click "Add sender of open email"); any matching row gets a `★ Priority` badge with a subtle pulsing glow, a soft gradient row wash, and a small animated star accent — a clear, always-visible signal at a glance without being garish.
+1. **Stale-email signals (automatic)** — continuously scans the visible message list and stamps a `⏰ Nd` badge directly onto any unread row that's sat unopened longer than the threshold (default 3 days, configurable in the "Stale" tab). Priority senders (see below) get their own, shorter threshold (default 1 day), so an important contact going quiet stands out faster than a newsletter doing the same — their badge is solid instead of outlined to tell them apart at a glance. Any individual flagged email can be **snoozed for a day** from the Stale tab if it's not actionable right now. No click required to flag; opening the email clears its badge right away — see "Recent fixes" below for why this used to lag.
+2. **Priority senders (automatic)** — add a sender's name, email, or an `@domain.com` (to match everyone at a company) in the "Priority" tab, at one of two levels — **Normal** or **High**. Matching rows get a badge and a flat side-accent in the message list; High-priority badges pulse subtly so they stand out from Normal ones. The tab shows how many senders you're tracking and how many are visible in the current list, and a search box filters a long list.
 3. **Follow-up tracker** — track the open email with an N-day reminder; overdue ones float to the top of the "Tracked" list and count toward the badge on the floating IA button.
 4. **Contacts insights** — pure-SVG donut charts (top 5 + "Other") plus a full deduped sender list ("All senders (N)") showing who you receive email from most and who you send email to most. Each sender appears exactly once with an incrementing message count — never one row per email — and counts accumulate across scans instead of resetting (see "About the Contacts tab" below).
 5. **Meeting cost calculator** — attendee count × salary-band hourly rate × duration, with a currency picker, a recurrence dropdown that projects an annual cost (weekly/bi-weekly/monthly), a live stopwatch that ticks the running cost of a meeting in real time, and a saved history of past calculations.
 6. **Multi-format export** — PDF and HTML now use a minimalist, professional "letterhead" layout (gradient accent bar, small-caps brand line, serif subject heading, left-accented meta card, footer divider); plus one-click Markdown and plain-text file downloads of the open email, sender included.
 7. **Schedule Send quick-picker** — one-click presets (Tomorrow 8am, Monday 9am, Friday EOD) *plus* a custom date/time picker for any minute of any day — both in the panel and as small pills (with an inline "Custom…" mini-picker) injected next to Outlook's own Send button. Times in the past are always blocked. This one is best-effort/experimental — see "Known limitations" below.
+
+8. **Light / dark theme** — a toggle in the panel header (☾ / ☀) switches the whole panel between a light and dark theme; defaults to your OS/browser preference the first time it runs, then remembers your choice.
 
 Only 4 files: `manifest.json`, `content.js`, `icon.png`, this README.
 
@@ -41,6 +43,10 @@ No build step, no bundler — it's loaded exactly as-is.
 
 ## Recent changes
 
+- **Priority levels, domain matching, and search.** Priority senders now have a Normal or High level (High gets a bolder, subtly-pulsing badge); adding `@company.com` matches everyone at that domain instead of one address; and the Priority tab has a search box plus tracked/visible counts. Existing plain-text priority lists from 1.3.0 and earlier are upgraded automatically to Normal level the first time the extension runs — nothing is lost.
+- **Priority-aware stale threshold and snoozing.** Priority senders can be flagged stale on a shorter, separately-configurable threshold (default 1 day) so an important contact going quiet stands out sooner; their badge and list entry are visually distinct from regular stale flags. Any single flagged email can now be snoozed for a day from the Stale tab.
+- **Light / dark theme.** A header toggle switches the whole panel between light and dark; it starts from your OS preference and remembers your choice after that.
+- **Visual redesign.** The panel now uses a flatter, more business-like palette (muted navy/slate instead of bright gradients), calmer priority highlighting (a solid side-accent instead of a glowing/pulsing wash on every row), and consistent spacing and typography throughout.
 - **PDF/HTML export redesign.** Both now share one "letterhead" template — a
   thin gradient top accent bar, a small-caps "Inbox Assistant · Exported
   Email" brand line, a serif subject heading, a left-accented meta card for
