@@ -7,12 +7,12 @@ badge when something needs attention); click it to open the panel with all
 seven tools:
 
 1. **Stale-email signals (automatic)** — continuously scans the visible message list and stamps a `⏰ Nd` badge directly onto any unread row that's sat unopened longer than the threshold (default 3 days, configurable in the "Stale" tab). No click required. Opening the email clears its badge right away — see "Recent fixes" below for why this used to lag.
-2. **Priority senders (automatic)** — add a sender's name or email in the "Priority" tab (or one-click "Add sender of open email"); any matching row in the message list automatically gets a `★ Priority` badge and a red side-accent, visible at a glance.
+2. **Priority senders (automatic)** — add a sender's name or email in the "Priority" tab (or one-click "Add sender of open email"); any matching row gets a `★ Priority` badge with a subtle pulsing glow, a soft gradient row wash, and a small animated star accent — a clear, always-visible signal at a glance without being garish.
 3. **Follow-up tracker** — track the open email with an N-day reminder; overdue ones float to the top of the "Tracked" list and count toward the badge on the floating IA button.
-4. **Contacts insights** — pure-SVG donut charts showing who you receive email from most and who you send email to most, built entirely from whatever messages are currently loaded in the list (see "About the Contacts tab" below).
-5. **Meeting cost calculator** — attendee count × salary-band hourly rate × duration, now with a currency picker, a recurrence dropdown that projects an annual cost (weekly/bi-weekly/monthly), a live stopwatch that ticks the running cost of a meeting in real time, and a saved history of past calculations.
-6. **Multi-format export** — PDF (via the print dialog), plus one-click HTML, Markdown, and plain-text file downloads of the open email, sender included.
-7. **Schedule Send quick-picker** — one-click presets (Tomorrow 8am, Monday 9am, Friday EOD) that appear both in the panel and as small pills injected next to Outlook's own Send button. This one is best-effort/experimental — see "Known limitations" below.
+4. **Contacts insights** — pure-SVG donut charts (top 5 + "Other") plus a full deduped sender list ("All senders (N)") showing who you receive email from most and who you send email to most. Each sender appears exactly once with an incrementing message count — never one row per email — and counts accumulate across scans instead of resetting (see "About the Contacts tab" below).
+5. **Meeting cost calculator** — attendee count × salary-band hourly rate × duration, with a currency picker, a recurrence dropdown that projects an annual cost (weekly/bi-weekly/monthly), a live stopwatch that ticks the running cost of a meeting in real time, and a saved history of past calculations.
+6. **Multi-format export** — PDF and HTML now use a minimalist, professional "letterhead" layout (gradient accent bar, small-caps brand line, serif subject heading, left-accented meta card, footer divider); plus one-click Markdown and plain-text file downloads of the open email, sender included.
+7. **Schedule Send quick-picker** — one-click presets (Tomorrow 8am, Monday 9am, Friday EOD) *plus* a custom date/time picker for any minute of any day — both in the panel and as small pills (with an inline "Custom…" mini-picker) injected next to Outlook's own Send button. Times in the past are always blocked. This one is best-effort/experimental — see "Known limitations" below.
 
 Only 4 files: `manifest.json`, `content.js`, `icon.png`, this README.
 
@@ -39,6 +39,30 @@ multi-format export, and Schedule Send.
 
 No build step, no bundler — it's loaded exactly as-is.
 
+## Recent changes
+
+- **PDF/HTML export redesign.** Both now share one "letterhead" template — a
+  thin gradient top accent bar, a small-caps "Inbox Assistant · Exported
+  Email" brand line, a serif subject heading, a left-accented meta card for
+  From/Exported, and a footer divider. No external fonts, images, or
+  network requests — system fonts only, still fully offline.
+- **Priority senders got real visual weight.** A matching row now gets a
+  soft animated glow on its red side-accent, a subtle gradient background
+  wash, and a small pulsing star in the corner; the `★ Priority` badge
+  itself has a soft gradient fill and a gentle pulse — noticeable without
+  being obnoxious.
+- **Schedule Send: any time, not just three presets.** Both the panel tab
+  and the inline pills next to Outlook's Send button now include a custom
+  date + time picker (minute-level precision, not locked to 30-minute
+  steps). Every scheduling path — presets, panel custom time, inline custom
+  time — is now blocked centrally from targeting a time that's already in
+  the past.
+- **Contacts: deduped sender totals, not a per-email list.** Scanning now
+  merges into persistent counts keyed by sender name, using each row's
+  stable conversation id to guarantee a message is only ever counted once
+  even across repeated scans — so the tab shows "Jane Doe — 14" rather than
+  fourteen separate rows for Jane Doe. See "About the Contacts tab" below.
+
 ## Recent fixes
 
 - **Stale badge never clearing, confirmed root cause.** `isRowUnread()` had a
@@ -64,15 +88,18 @@ No build step, no bundler — it's loaded exactly as-is.
 ## About the Contacts tab
 
 There's no Microsoft Graph API access here (see "Why no external
-libraries" / folders note below), so "who I hear from most" is built purely
-from whatever message rows Outlook has currently rendered in the list —
-not your whole mailbox history. To get a fuller picture: open the folder
-you care about (Inbox for "received from", Sent Items for "sent to"),
-scroll down to let Outlook load more rows, then click "Scan this list".
-Each scan replaces the previous snapshot for that folder (it doesn't
-accumulate across scans, to avoid double-counting rows that re-render
-during virtualized scrolling). The donut charts and legends are built with
-plain SVG (a `stroke-dasharray` ring trick) — no charting library.
+libraries" below), so "who I hear from most" is built purely from whatever
+message rows Outlook has currently rendered in the list — not your whole
+mailbox history. To get a fuller picture: open the folder you care about
+(Inbox for "received from", Sent Items for "sent to"), scroll down to let
+Outlook load more rows, then click "Scan this list" — repeat as often as
+you like. Each sender appears exactly once, with a count that increments
+by the number of *newly seen* messages each scan; every message row
+carries a stable id (its DOM `id` or `data-convid`), and that id is
+remembered so rescanning the same rows never double-counts them. Use
+"Reset counts" to start over for both folders. The donut charts (top 5 +
+"Other") and the "All senders" full list are built with plain SVG (a
+`stroke-dasharray` ring trick) and HTML — no charting library.
 
 ## Why no external libraries
 
