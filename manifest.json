@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Inbox Assistant for Outlook Web",
+  "name": "InboxSentry for Outlook",
   "version": "1.4.0",
-  "description": "Two-level priority senders (Normal/High, with @domain matching) that get flagged stale sooner and can be snoozed, a light/dark theme toggle, follow-up tracking, deduped sender/recipient insights with pie charts, a meeting-cost calculator with a live timer, letterhead-styled PDF/HTML export plus Markdown/Text, and a Schedule Send picker with any-time custom scheduling — all inside Outlook on the web.",
+  "description": "Priority senders, stale-email alerts, follow-up tracker, meeting cost calculator & export tools for Outlook Web.",
   "icons": {
     "16": "icon.png",
     "48": "icon.png",

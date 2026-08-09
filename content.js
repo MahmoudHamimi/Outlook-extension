@@ -1,4 +1,4 @@
-/* Inbox Assistant for Outlook Web — content.js
+/* InboxSentry for Outlook — content.js
    Runs on outlook.office.com / outlook.office365.com / outlook.live.com.
 
    IMPORTANT: Outlook web's DOM is not publicly documented and changes over
@@ -436,13 +436,13 @@
       .stat-inline .chip b { display:block; font-size:15px; color: var(--ia-primary); }
       .stat-inline .chip span { font-size:9.5px; color: var(--ia-muted); }
     </style>
-    <button class="toggle" id="ia-toggle" title="Inbox Assistant">
-      <span>IA</span>
+    <button class="toggle" id="ia-toggle" title="InboxSentry">
+      <span>IS</span>
       <span class="toggle-badge" id="ia-toggle-badge">0</span>
     </button>
     <div class="panel" id="ia-panel">
       <header>
-        <div><h1>Inbox Assistant</h1><p>Smart tools for your inbox</p></div>
+        <div><h1>InboxSentry</h1><p>Smart tools for your inbox</p></div>
         <button class="theme-toggle" id="ia-theme-toggle" title="Toggle light / dark theme">◐</button>
       </header>
       <nav id="ia-tabs">
@@ -1407,14 +1407,14 @@
 <body>
   <div class="ia-topbar"></div>
   <div class="ia-doc">
-    <div class="ia-brand"><span class="dot"></span>Inbox Assistant &middot; Exported Email</div>
+    <div class="ia-brand"><span class="dot"></span>InboxSentry &middot; Exported Email</div>
     <h1 class="ia-subject">${escapeHtml(info.subject)}</h1>
     <div class="ia-meta-card">
       <div><strong>From:</strong> ${escapeHtml(info.sender)}</div>
       <div><strong>Exported:</strong> ${escapeHtml(exportedAt)}</div>
     </div>
     <div class="ia-body">${escapeHtml(info.bodyText)}</div>
-    <div class="ia-footer"><span>Exported from Outlook Web</span><span>Inbox Assistant</span></div>
+    <div class="ia-footer"><span>Exported from Outlook Web</span><span>InboxSentry</span></div>
   </div>
 </body>
 </html>`;

@@ -1,7 +1,7 @@
-# Inbox Assistant for Outlook Web
+# InboxSentry for Outlook
 
 A browser extension (Chrome/Edge, Manifest V3) for **outlook.office.com**,
-**outlook.office365.com**, and **outlook.live.com**. A small floating "IA"
+**outlook.office365.com**, and **outlook.live.com**. A small floating "IS"
 button appears in the bottom-right corner of the inbox (with a red count
 badge when something needs attention); click it to open the panel with all
 seven tools:
@@ -37,7 +37,7 @@ multi-format export, and Schedule Send.
 1. Go to `chrome://extensions` (or `edge://extensions`).
 2. Turn on **Developer mode** (top right).
 3. Click **Load unpacked** and select this folder.
-4. Open outlook.office.com (or outlook.live.com) — you should see the round "IA" button appear bottom-right.
+4. Open outlook.office.com (or outlook.live.com) — you should see the round "IS" button appear bottom-right.
 
 No build step, no bundler — it's loaded exactly as-is.
 
@@ -48,7 +48,7 @@ No build step, no bundler — it's loaded exactly as-is.
 - **Light / dark theme.** A header toggle switches the whole panel between light and dark; it starts from your OS preference and remembers your choice after that.
 - **Visual redesign.** The panel now uses a flatter, more business-like palette (muted navy/slate instead of bright gradients), calmer priority highlighting (a solid side-accent instead of a glowing/pulsing wash on every row), and consistent spacing and typography throughout.
 - **PDF/HTML export redesign.** Both now share one "letterhead" template — a
-  thin gradient top accent bar, a small-caps "Inbox Assistant · Exported
+  thin accent bar, a small-caps "InboxSentry · Exported
   Email" brand line, a serif subject heading, a left-accented meta card for
   From/Exported, and a footer divider. No external fonts, images, or
   network requests — system fonts only, still fully offline.
