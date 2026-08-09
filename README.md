@@ -41,17 +41,25 @@ No build step, no bundler — it's loaded exactly as-is.
 
 ## Recent fixes
 
-- **Stale badge not clearing on open.** The badge is recomputed by a
-  `MutationObserver`, but the old version only watched for elements being
-  added/removed. Outlook usually marks a row "read" by changing an
-  *attribute* on the existing row (its `aria-label` or class), not by
-  swapping the node out — so that change never fired a rescan and the badge
-  could linger. The observer now also watches `aria-label`/`class`/`title`
-  attribute changes, and — since Outlook can take a second or two to
-  actually flag a row as read — clicking any row now also (a) optimistically
-  removes that row's stale badge immediately for instant feedback, and (b)
-  schedules a few follow-up rescans (300ms/900ms/2s) to reconcile with
-  whatever Outlook ends up doing.
+- **Stale badge never clearing, confirmed root cause.** `isRowUnread()` had a
+  bold-text fallback ("if any text in this row renders bold, treat it as
+  unread") for skins where Outlook doesn't expose a clean unread signal. That
+  fallback was matching the sender's **avatar initials** (e.g. "MH", "A"),
+  which Outlook renders bold/600-weight permanently, whether the email is
+  read or not — so once that fallback fired, a row could never be detected
+  as "read" again and its stale badge could never clear, no matter how many
+  times you rescanned. Fixed two ways: (1) unread detection now checks
+  Outlook's own per-row "Mark as read" / "Mark as unread" toggle-button
+  title first — confirmed via diagnostic to be an unambiguous, always-
+  accurate signal of the row's current state — before falling back to
+  anything else; (2) the bold-text fallback (now last-resort only) explicitly
+  skips avatar/initials elements so it can't misfire the same way again.
+- **MutationObserver only watching for added/removed nodes.** Outlook marks a
+  row "read" by changing an *attribute* on the existing row, not by swapping
+  the node out, so the observer now also watches `aria-label`/`class`/`title`
+  attribute changes, and clicking any row also triggers a same-frame
+  optimistic badge removal plus a couple of staggered rescans (300ms/900ms/2s)
+  as a fallback in case Outlook is slow to update.
 
 ## About the Contacts tab
 

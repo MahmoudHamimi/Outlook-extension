@@ -142,13 +142,31 @@
      attributes, and bold-text rendering (OWA's convention for unread items).
      Anything that can't be determined confidently is simply skipped. */
   function isRowUnread(row) {
+    // Most reliable signal: Outlook renders a per-row "Mark as read" / "Mark as
+    // unread" toggle button whose title unambiguously reflects the row's
+    // CURRENT state — "Mark as read" means clicking it would mark the row
+    // read, i.e. it is currently unread; "Mark as unread" means the opposite.
+    // Confirmed via diagnostic: this stayed accurate for both freshly-unread
+    // and already-opened rows, unlike the fallbacks below.
+    const buttons = row.querySelectorAll("button[title]");
+    for (const b of buttons) {
+      const t = (b.getAttribute("title") || "").trim().toLowerCase();
+      if (t === "mark as read") return true;
+      if (t === "mark as unread") return false;
+    }
     const label = (row.getAttribute("aria-label") || "").trim();
     if (/^unread\b/i.test(label)) return true;
     if (row.querySelector('[class*="unread" i]')) return true;
+    // Bold-text fallback, used only if neither signal above was found.
+    // FIX: this used to also match the sender's avatar initials (e.g. "MH",
+    // "A"), which Outlook renders bold/600-weight PERMANENTLY regardless of
+    // read state — that false positive is why stale badges could never
+    // clear once set. Avatar/initials elements are now explicitly skipped.
     const candidates = row.querySelectorAll("span, div");
     for (let i = 0; i < candidates.length && i < 12; i++) {
       const el = candidates[i];
       if (!el.textContent || !el.textContent.trim()) continue;
+      if (el.closest('[class*="avatar" i]') || el.getAttribute("role") === "img") continue;
       const weight = window.getComputedStyle(el).fontWeight;
       if (weight === "bold" || parseInt(weight, 10) >= 600) return true;
     }
