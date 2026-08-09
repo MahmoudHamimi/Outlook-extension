@@ -24,10 +24,20 @@
       '[role="heading"].allowTextSelection',
       '[role="main"] [role="heading"]'
     ],
-    // Compose windows (inline reply, popped-out new message) — editable body.
-    composeBodySelectors: ['div[contenteditable="true"][role="textbox"]', 'div[contenteditable="true"]'],
     // The Send button, wherever a compose surface renders it.
     sendButtonSelectors: ['button[aria-label="Send"]', 'button[name="Send"]'],
+    // Best-effort, EXPERIMENTAL: the little dropdown/caret next to Send that opens
+    // Outlook's own "Send later" menu. This is the least stable selector set in
+    // this file — Outlook's send-options menu is an undocumented Fluent UI
+    // control, so the Schedule Send feature always treats a miss here as a
+    // graceful fallback (copy the time, let you pick it yourself) rather than
+    // failing silently. See the Schedule section below for details.
+    scheduleSendMoreOptionsSelectors: [
+      'button[aria-label*="Send options" i]',
+      'button[aria-label*="More send options" i]',
+      'button[aria-label*="Schedule send" i]',
+      'button[aria-label*="Send later" i]'
+    ],
     // Reading pane: who the open email is from. OWA usually exposes this via an
     // aria-label/title starting with "From:" or containing an email address.
     readingSenderSelectors: [
@@ -41,8 +51,9 @@
     mailListItemSelectors: ['div[role="option"]', 'div[role="row"]'],
     followupStorageKey: "ia_followups_v1",
     priorityStorageKey: "ia_priority_senders_v1",
-    categoriesStorageKey: "ia_categories_v1",
-    emailCategoryStorageKey: "ia_email_categories_v1",
+    contactsReceivedStorageKey: "ia_contacts_received_v1",
+    contactsSentStorageKey: "ia_contacts_sent_v1",
+    costHistoryStorageKey: "ia_cost_history_v1",
     // How many days an unread email can sit untouched before we flag it.
     staleThresholdDays: 3
   };
@@ -102,8 +113,30 @@
       url: window.location.href
     };
   }
+  function downloadBlob(filename, content, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+  function safeFilename(subject) {
+    return (subject || "email").replace(/[^a-z0-9\-_ ]/gi, "").trim().slice(0, 60) || "email";
+  }
+  async function copyToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
 
-  /* ---- Message-list row heuristics (used by the stale + priority signals) ----
+  /* ---- Message-list row heuristics (used by stale, priority & contacts) ----
      OWA's list markup isn't documented and varies by skin, so these read only
      from accessible/robust signals: aria-label text, native tooltip "title"
      attributes, and bold-text rendering (OWA's convention for unread items).
@@ -132,6 +165,9 @@
     return null;
   }
   function findRowSender(row) {
+    // Doubles as "find the row's contact" for the Contacts insights feature —
+    // in Outlook's Sent Items view this same position shows the recipient
+    // ("To: ...") instead of the sender, which is exactly what we want there.
     const label = row.getAttribute("aria-label") || "";
     const parts = label.split(/,|\u2022|\|/).map((s) => s.trim()).filter(Boolean);
     if (parts.length) {
@@ -147,6 +183,16 @@
     const s = sender.toLowerCase();
     return prioritySenders.some((p) => p && s.includes(p.toLowerCase()));
   }
+
+  /* ============================== SHARED STATE ============================== */
+  // Declared up top (rather than inline in each section) so every section can
+  // safely reference these regardless of which order the sections initialize in.
+  let staleThresholdDays = CONFIG.staleThresholdDays;
+  let priorityCache = [];
+  let lastStaleItems = []; // [{subject, sender, ageDays}] from the most recent scan
+  let liveTimerInterval = null;
+  let liveStartedAt = null;
+  let liveElapsedBeforePause = 0;
 
   // Injected once into the real page (not the shadow root) so badges we add to
   // Outlook's own list rows render correctly; scoped with an "ia-" prefix to
@@ -174,23 +220,35 @@
       :host { all: initial; }
       * { box-sizing: border-box; font-family: "Segoe UI", Arial, sans-serif; }
       .toggle {
-        width: 52px; height: 52px; border-radius: 50%; background:#1B4F8C; color:#fff;
-        border:none; cursor:pointer; box-shadow:0 2px 10px rgba(0,0,0,.3); font-size:20px;
+        width: 54px; height: 54px; border-radius: 50%;
+        background: linear-gradient(135deg,#1B4F8C,#20B999); color:#fff;
+        border:none; cursor:pointer; box-shadow:0 4px 16px rgba(27,79,140,.45); font-size:14px;
+        font-weight:800; position:relative; display:flex; align-items:center; justify-content:center;
+        transition: transform .15s ease;
+      }
+      .toggle:hover { transform:scale(1.06); }
+      .toggle-badge {
+        position:absolute; top:-4px; right:-4px; background:#B3261E; color:#fff; border-radius:10px;
+        min-width:18px; height:18px; display:none; align-items:center; justify-content:center;
+        font-size:10px; font-weight:700; padding:0 4px; box-shadow:0 0 0 2px #fff;
       }
       .panel {
-        display:none; position:fixed; bottom:82px; right:20px; width:380px; max-height:75vh;
-        background:#fff; border-radius:10px; box-shadow:0 6px 24px rgba(0,0,0,.25);
+        display:none; position:fixed; bottom:84px; right:20px; width:390px; max-height:78vh;
+        background:#fff; border-radius:14px; box-shadow:0 10px 34px rgba(20,30,50,.28);
         overflow:hidden; flex-direction:column; border:1px solid #E1E5EA;
       }
       .panel.open { display:flex; }
-      header { background:#1B4F8C; color:#fff; padding:10px 14px; }
-      header h1 { margin:0; font-size:14px; }
+      header { background: linear-gradient(135deg,#1B4F8C 0%, #2F6FB0 55%, #20B999 100%); color:#fff; padding:13px 15px; }
+      header h1 { margin:0; font-size:15px; letter-spacing:.2px; }
+      header p { margin:2px 0 0; font-size:10.5px; opacity:.9; }
       nav { display:flex; flex-wrap:wrap; background:#fff; border-bottom:1px solid #E1E5EA; }
       nav button {
-        flex:1 1 25%; border:none; background:none; padding:7px 3px; font-size:10px; cursor:pointer;
+        flex:1 1 25%; border:none; background:none; padding:7px 2px 6px; font-size:9.5px; cursor:pointer;
         color:#5B6472; border-bottom:3px solid transparent; white-space:nowrap;
+        display:flex; flex-direction:column; align-items:center; gap:1px;
       }
-      nav button.active { color:#1B4F8C; border-bottom-color:#1B4F8C; font-weight:600; }
+      nav button .nav-icon { font-size:14px; line-height:1; }
+      nav button.active { color:#1B4F8C; border-bottom-color:#1B4F8C; font-weight:700; background:#F5F8FC; }
       main { padding:12px 14px; overflow-y:auto; font-size:12.5px; color:#20242B; }
       section { display:none; }
       section.active { display:block; }
@@ -198,26 +256,28 @@
       .muted { color:#5B6472; font-size:11px; line-height:1.5; }
       label { display:block; font-size:11px; font-weight:600; margin:8px 0 3px; }
       input, select {
-        width:100%; padding:5px 7px; border:1px solid #E1E5EA; border-radius:5px; font-size:12px;
+        width:100%; padding:5px 7px; border:1px solid #E1E5EA; border-radius:6px; font-size:12px;
       }
       button.primary {
-        background:#1B4F8C; color:#fff; border:none; border-radius:5px; padding:6px 11px;
-        font-size:11.5px; cursor:pointer; margin-top:7px;
+        background: linear-gradient(135deg,#1B4F8C,#2F8FD1); color:#fff; border:none; border-radius:7px;
+        padding:7px 12px; font-size:11.5px; font-weight:600; cursor:pointer; margin-top:7px;
+        box-shadow:0 2px 6px rgba(27,79,140,.25); transition: transform .1s ease;
       }
+      button.primary:hover { transform:translateY(-1px); }
       button.secondary {
-        background:#fff; color:#1B4F8C; border:1px solid #1B4F8C; border-radius:5px; padding:4px 8px;
-        font-size:10.5px; cursor:pointer; margin-right:6px; margin-top:4px;
+        background:#fff; color:#1B4F8C; border:1px solid #C9D6E8; border-radius:7px; padding:5px 10px;
+        font-size:10.5px; cursor:pointer; margin-right:6px; margin-top:5px; font-weight:600;
       }
-      .item { border:1px solid #E1E5EA; border-radius:6px; padding:7px; margin-bottom:7px; }
+      button.secondary:hover { background:#EDF1F7; }
+      .item { border:1px solid #E1E5EA; border-radius:8px; padding:7px 8px; margin-bottom:7px; }
       .pill { display:inline-block; padding:2px 7px; border-radius:9px; font-size:10px; font-weight:600; }
       .pill.warn { background:#FCE9DA; color:#B26A00; }
       .pill.ok { background:#E4F3E5; color:#2E7D32; }
       .pill.due { background:#FBE1DE; color:#B3261E; }
       .empty { color:#5B6472; font-style:italic; font-size:11px; }
-      #costResult { font-size:18px; font-weight:700; color:#1B4F8C; margin-top:4px; }
       .warning-list { margin:0; padding-left:16px; }
       .warning-list li { margin-bottom:5px; }
-      .row-flex { display:flex; gap:6px; align-items:center; }
+      .row-flex { display:flex; gap:6px; align-items:flex-end; }
       .row-flex input, .row-flex select { flex:1; }
       .tag-list { list-style:none; margin:8px 0 0; padding:0; }
       .tag-list li {
@@ -225,27 +285,34 @@
         border:1px solid #E1E5EA; border-radius:6px; padding:5px 8px; margin-bottom:5px; font-size:11.5px;
       }
       .tag-list button { background:none; border:none; color:#B3261E; cursor:pointer; font-size:11px; }
-      details.folder-group { border:1px solid #E1E5EA; border-radius:6px; margin-bottom:7px; }
-      details.folder-group summary {
-        cursor:pointer; padding:7px 9px; font-size:11.5px; font-weight:600; list-style:none;
-        display:flex; justify-content:space-between; align-items:center;
+      .stat-card {
+        background: linear-gradient(135deg,#EDF1F7,#F5F8FC); border:1px solid #E1E5EA; border-radius:10px;
+        padding:12px 14px; margin-top:8px; text-align:center;
       }
-      details.folder-group summary::-webkit-details-marker { display:none; }
-      details.folder-group .folder-items { padding:0 9px 9px; }
-      .count-chip { background:#EDF1F7; color:#1B4F8C; border-radius:9px; padding:1px 8px; font-size:10px; font-weight:700; }
+      .stat-big {
+        font-size:26px; font-weight:800; background: linear-gradient(135deg,#1B4F8C,#20B999);
+        -webkit-background-clip:text; background-clip:text; color:#1B4F8C;
+      }
+      @supports (-webkit-background-clip:text) { .stat-big { color:transparent; } }
+      .donut-row { display:flex; gap:14px; align-items:center; }
+      .donut-legend { list-style:none; margin:0; padding:0; font-size:11px; flex:1; }
+      .donut-legend li { display:flex; align-items:center; gap:6px; margin-bottom:4px; }
+      .dot { width:9px; height:9px; border-radius:50%; display:inline-block; flex-shrink:0; }
     </style>
-    <button class="toggle" id="ia-toggle" title="Inbox Assistant">IA</button>
+    <button class="toggle" id="ia-toggle" title="Inbox Assistant">
+      <span>IA</span>
+      <span class="toggle-badge" id="ia-toggle-badge">0</span>
+    </button>
     <div class="panel" id="ia-panel">
-      <header><h1>Inbox Assistant</h1></header>
+      <header><h1>Inbox Assistant</h1><p>Smart tools for your inbox</p></header>
       <nav id="ia-tabs">
-        <button data-tab="followup" class="active">Follow-ups</button>
-        <button data-tab="stale">Stale</button>
-        <button data-tab="priority">Priority</button>
-        <button data-tab="folders">Folders</button>
-        <button data-tab="meeting">Meetings</button>
-        <button data-tab="tone">Tone</button>
-        <button data-tab="cost">Cost</button>
-        <button data-tab="pdf">PDF</button>
+        <button data-tab="followup" class="active"><span class="nav-icon">📌</span>Follow-ups</button>
+        <button data-tab="stale"><span class="nav-icon">⏰</span>Stale</button>
+        <button data-tab="priority"><span class="nav-icon">★</span>Priority</button>
+        <button data-tab="contacts"><span class="nav-icon">📊</span>Contacts</button>
+        <button data-tab="cost"><span class="nav-icon">💰</span>Cost</button>
+        <button data-tab="export"><span class="nav-icon">📤</span>Export</button>
+        <button data-tab="schedule"><span class="nav-icon">🗓️</span>Schedule</button>
       </nav>
       <main>
         <section id="tab-followup" class="active">
@@ -261,7 +328,7 @@
 
         <section id="tab-stale">
           <h2>Unopened &gt; <span id="ia-stale-threshold-label">3</span> days</h2>
-          <p class="muted">Automatically scans the message list and flags any unread email that's sat unopened past the threshold — look for the <span class="pill due">⏰ Nd</span> badge directly on the row.</p>
+          <p class="muted">Automatically scans the message list and flags any unread email that's sat unopened past the threshold — look for the <span class="pill due">⏰ Nd</span> badge directly on the row. Opening the email clears its badge right away.</p>
           <label>Flag unread emails older than (days)</label>
           <div class="row-flex">
             <input type="number" id="ia-stale-days" min="1" max="60" value="3" />
@@ -284,63 +351,89 @@
           <ul class="tag-list" id="ia-priority-list"><li class="empty" style="border:none;">No priority senders yet.</li></ul>
         </section>
 
-        <section id="tab-folders">
-          <h2>Categorize this email</h2>
-          <p class="muted">Client-side folders stored by the extension — assign the open email to one, then browse by folder below.</p>
-          <label>New folder name</label>
-          <div class="row-flex">
-            <input type="text" id="ia-folder-new" placeholder="e.g. Clients" />
-            <button class="primary" id="ia-folder-create" style="margin-top:0;">Create</button>
-          </div>
-          <label style="margin-top:10px;">Assign open email to</label>
-          <div class="row-flex">
-            <select id="ia-folder-select"><option value="">No folders yet</option></select>
-            <button class="primary" id="ia-folder-assign" style="margin-top:0;">Assign</button>
-          </div>
-          <p class="muted" id="ia-folder-status"></p>
-          <h2 style="margin-top:14px;">Your folders</h2>
-          <div id="ia-folder-groups"><p class="empty">No folders created yet.</p></div>
-        </section>
-
-        <section id="tab-meeting">
-          <h2>Meeting-request extractor</h2>
-          <p class="muted">Scans the open email for dates/times and opens a prefilled Outlook calendar event.</p>
-          <button class="primary" id="ia-scan">Scan this email</button>
-          <div id="ia-meeting-results"></div>
-        </section>
-
-        <section id="tab-tone">
-          <h2>Reply-tone checker</h2>
-          <p class="muted">Checks the open compose box for curt, overly formal, or passive-aggressive phrasing. Also intercepts Send automatically.</p>
-          <button class="primary" id="ia-tone-check">Check tone now</button>
-          <div id="ia-tone-results"></div>
+        <section id="tab-contacts">
+          <h2>Who you hear from most</h2>
+          <p class="muted">Built entirely from whatever messages are currently loaded in the list — scroll to load more, open the folder you want (Inbox or Sent Items), then scan. Nothing leaves your browser.</p>
+          <button class="primary" id="ia-contacts-scan">📊 Scan this list</button>
+          <p class="muted" id="ia-contacts-status"></p>
+          <h2 style="margin-top:14px;">Received from</h2>
+          <div id="ia-contacts-received"><p class="empty">No inbox scan yet — open your Inbox and scan.</p></div>
+          <h2 style="margin-top:14px;">Sent to</h2>
+          <div id="ia-contacts-sent"><p class="empty">No Sent scan yet — open Sent Items and scan.</p></div>
         </section>
 
         <section id="tab-cost">
           <h2>Meeting cost calculator</h2>
-          <label>Attendee count</label>
-          <input type="number" id="ia-cost-attendees" min="1" value="4" />
+          <div class="row-flex">
+            <div style="flex:1;"><label>Attendee count</label><input type="number" id="ia-cost-attendees" min="1" value="4" /></div>
+            <div style="flex:1;"><label>Currency</label>
+              <select id="ia-cost-currency">
+                <option value="$">USD ($)</option>
+                <option value="€">EUR (€)</option>
+                <option value="£">GBP (£)</option>
+              </select>
+            </div>
+          </div>
           <label>Average salary band</label>
           <select id="ia-cost-salary">
-            <option value="50000">~$50,000/yr</option>
-            <option value="75000" selected>~$75,000/yr</option>
-            <option value="100000">~$100,000/yr</option>
-            <option value="125000">~$125,000/yr</option>
-            <option value="150000">~$150,000/yr</option>
-            <option value="200000">~$200,000/yr</option>
+            <option value="50000">~50,000/yr</option>
+            <option value="75000" selected>~75,000/yr</option>
+            <option value="100000">~100,000/yr</option>
+            <option value="125000">~125,000/yr</option>
+            <option value="150000">~150,000/yr</option>
+            <option value="200000">~200,000/yr</option>
           </select>
-          <label>Duration (minutes)</label>
-          <input type="number" id="ia-cost-duration" min="5" step="5" value="30" />
+          <div class="row-flex">
+            <div style="flex:1;"><label>Duration (minutes)</label><input type="number" id="ia-cost-duration" min="5" step="5" value="30" /></div>
+            <div style="flex:1;"><label>Recurs</label>
+              <select id="ia-cost-recurrence">
+                <option value="1">One-time</option>
+                <option value="52">Weekly</option>
+                <option value="26">Bi-weekly</option>
+                <option value="12">Monthly</option>
+              </select>
+            </div>
+          </div>
           <button class="primary" id="ia-cost-calc">Calculate</button>
-          <div id="ia-cost-result"></div>
-          <p class="muted" id="ia-cost-note"></p>
+          <div class="stat-card">
+            <div class="stat-big" id="ia-cost-result">—</div>
+            <p class="muted" id="ia-cost-note"></p>
+            <p class="muted" id="ia-cost-fun"></p>
+          </div>
+
+          <h2 style="margin-top:14px;">⏱️ Live meeting timer</h2>
+          <p class="muted">Start it when the meeting starts — watch the cost climb in real time.</p>
+          <div class="stat-card">
+            <div class="stat-big" id="ia-cost-live">$0.00</div>
+            <p class="muted" id="ia-cost-live-elapsed">00:00</p>
+            <button class="primary" id="ia-cost-live-toggle" style="margin-right:6px;">▶ Start</button>
+            <button class="secondary" id="ia-cost-live-reset">Reset</button>
+          </div>
+
+          <h2 style="margin-top:14px;">History (<span id="ia-cost-history-count">0</span>)</h2>
+          <div id="ia-cost-history"><p class="empty">No meetings calculated yet.</p></div>
+          <button class="secondary" id="ia-cost-history-clear">Clear history</button>
         </section>
 
-        <section id="tab-pdf">
-          <h2>Download as PDF</h2>
-          <p class="muted">Opens a print-formatted version of the open email — choose "Save as PDF" as the destination in the print dialog.</p>
-          <button class="primary" id="ia-pdf">Download email as PDF</button>
-          <p class="muted" id="ia-pdf-status"></p>
+        <section id="tab-export">
+          <h2>Export this email</h2>
+          <p class="muted">Choose a format — everything is generated locally in your browser, nothing is uploaded.</p>
+          <button class="primary" id="ia-export-pdf">🖨️ PDF (print dialog)</button><br/>
+          <button class="secondary" id="ia-export-html">🌐 HTML file</button>
+          <button class="secondary" id="ia-export-md">📝 Markdown file</button>
+          <button class="secondary" id="ia-export-txt">📄 Plain text file</button>
+          <p class="muted" id="ia-export-status"></p>
+        </section>
+
+        <section id="tab-schedule">
+          <h2>🗓️ Schedule Send Quick-Picker</h2>
+          <p class="muted">These same three presets also appear as small pills next to Outlook's own Send button while composing. Picking one opens Outlook's native "Send later" dialog and gets as close as possible automatically — you always confirm the exact time yourself in Outlook's own dialog.</p>
+          <div class="row-flex" style="flex-wrap:wrap;">
+            <button class="secondary" data-preset="tomorrow8">Tomorrow 8am</button>
+            <button class="secondary" data-preset="monday9">Monday 9am</button>
+            <button class="secondary" data-preset="fridayEod">Friday EOD</button>
+          </div>
+          <p class="muted" id="ia-schedule-status"></p>
         </section>
       </main>
     </div>
@@ -360,6 +453,22 @@
       $("#tab-" + btn.dataset.tab).classList.add("active");
     });
   });
+
+  async function updateToggleBadge() {
+    const followUps = (await getFollowUps()).filter((f) => !f.replied);
+    const overdue = followUps.filter(
+      (f) => Math.floor((Date.now() - new Date(f.trackedAt).getTime()) / 86400000) >= f.days
+    ).length;
+    const total = overdue + lastStaleItems.length;
+    const badge = $("#ia-toggle-badge");
+    if (!badge) return;
+    if (total > 0) {
+      badge.style.display = "flex";
+      badge.textContent = total > 99 ? "99+" : String(total);
+    } else {
+      badge.style.display = "none";
+    }
+  }
 
   /* =========================================================
      1) FOLLOW-UP TRACKER
@@ -407,6 +516,7 @@
     const container = $("#ia-followup-list");
     if (list.length === 0) {
       container.innerHTML = '<p class="empty">Nothing tracked yet.</p>';
+      updateToggleBadge();
       return;
     }
     const withElapsed = list.map((f) => ({
@@ -451,6 +561,7 @@
         }
       });
     });
+    updateToggleBadge();
   }
   renderFollowUps();
 
@@ -459,11 +570,20 @@
      Scans the visible message list on a debounce (list re-renders
      constantly as OWA virtualizes rows) and stamps a badge onto any
      unread row whose received date is older than the threshold.
-     ========================================================= */
-  let staleThresholdDays = CONFIG.staleThresholdDays;
-  let priorityCache = [];
-  let lastStaleItems = []; // [{subject, sender, ageDays}] from the most recent scan, for the Stale tab
 
+     FIX: the badge used to survive after you opened a stale email.
+     That was because the old MutationObserver only watched for
+     nodes being added/removed (childList), but Outlook usually
+     marks a row "read" by changing an *attribute* (aria-label /
+     class) on the existing row rather than swapping the node out —
+     so no childList mutation ever fired and the badge never got
+     recomputed. This version also watches attributes, and — since
+     Outlook sometimes marks a row read a second or two after the
+     click rather than instantly — a click on any row also triggers
+     an optimistic same-frame badge removal plus a couple of
+     follow-up rescans to reconcile with whatever Outlook ends up
+     doing.
+     ========================================================= */
   async function loadStaleThreshold() {
     const stored = await storageGet("ia_stale_days_v1");
     staleThresholdDays = stored || CONFIG.staleThresholdDays;
@@ -518,22 +638,24 @@
   function renderStaleTab() {
     const countEl = $("#ia-stale-count");
     const listEl = $("#ia-stale-list");
-    if (!countEl || !listEl) return;
-    countEl.textContent = lastStaleItems.length;
-    if (lastStaleItems.length === 0) {
-      listEl.innerHTML = '<p class="empty">Nothing flagged in the visible list right now.</p>';
-      return;
+    if (countEl && listEl) {
+      countEl.textContent = lastStaleItems.length;
+      if (lastStaleItems.length === 0) {
+        listEl.innerHTML = '<p class="empty">Nothing flagged in the visible list right now.</p>';
+      } else {
+        listEl.innerHTML = lastStaleItems
+          .sort((a, b) => b.ageDays - a.ageDays)
+          .map(
+            (it) => `
+          <div class="item">
+            <strong style="font-size:11.5px;">${escapeHtml(it.subject).slice(0, 60)}</strong>
+            <div class="muted">${escapeHtml(it.sender)} &middot; <span class="pill due">${it.ageDays}d unopened</span></div>
+          </div>`
+          )
+          .join("");
+      }
     }
-    listEl.innerHTML = lastStaleItems
-      .sort((a, b) => b.ageDays - a.ageDays)
-      .map(
-        (it) => `
-      <div class="item">
-        <strong style="font-size:11.5px;">${escapeHtml(it.subject).slice(0, 60)}</strong>
-        <div class="muted">${escapeHtml(it.sender)} &middot; <span class="pill due">${it.ageDays}d unopened</span></div>
-      </div>`
-      )
-      .join("");
+    updateToggleBadge();
   }
 
   let scanTimer = null;
@@ -541,11 +663,35 @@
     clearTimeout(scanTimer);
     scanTimer = setTimeout(scanMailList, 500);
   }
-  new MutationObserver(scheduleScan).observe(document.body, { childList: true, subtree: true });
+  // Watch both node changes AND attribute changes (see FIX note above) so a
+  // row that goes from unread -> read without being replaced still triggers
+  // a rescan and clears its badge.
+  new MutationObserver(scheduleScan).observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["aria-label", "class", "title"]
+  });
   loadStaleThreshold().then(() => refreshPriorityCache().then(scanMailList));
   // OWA re-renders on its own, but a row's age can cross the threshold with no
   // DOM change at all (time just passes), so also re-check periodically.
   setInterval(scanMailList, 5 * 60 * 1000);
+
+  // Belt-and-suspenders: optimistically clear a clicked row's stale badge
+  // immediately (instant visual feedback), then reconcile with a couple of
+  // staggered rescans in case Outlook takes a moment to actually mark it read.
+  document.addEventListener(
+    "click",
+    (e) => {
+      const row = e.target.closest(CONFIG.mailListItemSelectors.join(","));
+      if (!row) return;
+      const staleBadge = row.querySelector(".ia-badge-stale");
+      if (staleBadge) staleBadge.remove();
+      [300, 900, 2000].forEach((delay) => setTimeout(scanMailList, delay));
+    },
+    true
+  );
+  window.addEventListener("focus", scanMailList);
 
   $("#ia-stale-save").addEventListener("click", async () => {
     const days = Math.max(1, parseInt($("#ia-stale-days").value, 10) || 3);
@@ -579,7 +725,9 @@
       .join("");
     el.querySelectorAll("li").forEach((li) => {
       const i = parseInt(li.dataset.i, 10);
-      li.querySelector('[data-action="remove"]').addEventListener("click", async () => {
+      const removeBtn = li.querySelector('[data-action="remove"]');
+      if (!removeBtn) return;
+      removeBtn.addEventListener("click", async () => {
         const cur = await getPrioritySenders();
         cur.splice(i, 1);
         await savePrioritySenders(cur);
@@ -609,607 +757,285 @@
   renderPriorityList();
 
   /* =========================================================
-     1d) FOLDERS / MANUAL CATEGORIZATION
-     Client-side only: this organizes emails within the extension's
-     own storage (it doesn't move messages via Outlook's own folders,
-     since that would require server-side API permissions this
-     extension doesn't request).
+     1d) CONTACTS INSIGHTS — who you receive from / send to most.
+     Built entirely from whatever message rows are currently loaded
+     in the visible list (no Microsoft Graph API involved, so it's a
+     snapshot of what's rendered — scroll to load more rows before
+     scanning for a fuller picture). Rendered as pure-SVG donut
+     charts (a stroke-dasharray ring trick) with no charting library.
      ========================================================= */
-  async function getFolders() {
-    return (await storageGet(CONFIG.categoriesStorageKey)) || [];
-  }
-  async function saveFolders(list) {
-    await storageSet(CONFIG.categoriesStorageKey, list);
-  }
-  async function getEmailFolders() {
-    return (await storageGet(CONFIG.emailCategoryStorageKey)) || {};
-  }
-  async function saveEmailFolders(map) {
-    await storageSet(CONFIG.emailCategoryStorageKey, map);
+  const DONUT_COLORS = ["#1B4F8C", "#20B999", "#E8A33D", "#B3261E", "#6C3FBF", "#2F8FD1", "#8A6D00", "#5B6472"];
+
+  function detectFolderContext() {
+    const path = window.location.pathname.toLowerCase();
+    if (/\/sentitems\b/.test(path)) return "sent";
+    if (/\/inbox\b/.test(path) || /\/mail\/0\/?$/.test(path) || path.endsWith("/mail")) return "received";
+    const selected = document.querySelector('[aria-selected="true"], [aria-current="true"], [aria-current="page"]');
+    const label = selected ? (selected.getAttribute("aria-label") || selected.textContent || "") : "";
+    if (/sent/i.test(label)) return "sent";
+    if (/inbox/i.test(label)) return "received";
+    return "unknown";
   }
 
-  async function populateFolderSelect() {
-    const folders = await getFolders();
-    const sel = $("#ia-folder-select");
-    sel.innerHTML = folders.length
-      ? folders.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join("")
-      : '<option value="">No folders yet</option>';
-  }
-
-  async function renderFolderGroups() {
-    const folders = await getFolders();
-    const assigned = await getEmailFolders();
-    const container = $("#ia-folder-groups");
-    if (folders.length === 0) {
-      container.innerHTML = '<p class="empty">No folders created yet.</p>';
-      return;
-    }
-    const byFolder = {};
-    folders.forEach((f) => (byFolder[f] = []));
-    Object.entries(assigned).forEach(([id, entry]) => {
-      if (byFolder[entry.folder]) byFolder[entry.folder].push({ id, ...entry });
+  function scanContactsSnapshot() {
+    const context = detectFolderContext();
+    const container = qFirst(CONFIG.mailListContainerSelectors) || document.body;
+    const rows = qAllVisible(CONFIG.mailListItemSelectors, container);
+    const counts = {};
+    rows.forEach((row) => {
+      const name = findRowSender(row);
+      if (!name) return;
+      counts[name] = (counts[name] || 0) + 1;
     });
+    return { context, counts, scannedAt: new Date().toISOString(), rowCount: rows.length };
+  }
 
-    container.innerHTML = folders
-      .map((f) => {
-        const items = byFolder[f] || [];
-        const itemsHtml =
-          items.length === 0
-            ? '<p class="empty">No emails in this folder yet.</p>'
-            : items
-                .map(
-                  (it) => `
-              <div class="item" data-id="${escapeHtml(it.id)}">
-                <strong style="font-size:11.5px;">${escapeHtml(it.subject).slice(0, 55)}</strong>
-                <div class="muted">${escapeHtml(it.sender)}</div>
-                <button class="secondary" data-action="open">Open</button>
-                <button class="secondary" data-action="remove">Remove</button>
-              </div>`
-                )
-                .join("");
-        return `
-        <details class="folder-group">
-          <summary>${escapeHtml(f)} <span class="count-chip">${items.length}</span></summary>
-          <div class="folder-items">
-            ${itemsHtml}
-            <button class="secondary" data-delete-folder="${escapeHtml(f)}" style="color:#B3261E; border-color:#B3261E;">Delete folder</button>
-          </div>
-        </details>`;
+  function topEntries(counts, n = 5) {
+    const arr = Object.entries(counts)
+      .map(([label, count]) => ({ label, count }))
+      .sort((a, b) => b.count - a.count);
+    const top = arr.slice(0, n);
+    const restTotal = arr.slice(n).reduce((s, x) => s + x.count, 0);
+    if (restTotal > 0) top.push({ label: "Other", count: restTotal });
+    return top.map((item, i) => ({
+      ...item,
+      color: item.label === "Other" ? "#C7CDD6" : DONUT_COLORS[i % DONUT_COLORS.length]
+    }));
+  }
+
+  function buildDonutSVG(items, size = 132, thickness = 24) {
+    const total = items.reduce((s, i) => s + i.count, 0) || 1;
+    const r = (size - thickness) / 2;
+    const cx = size / 2;
+    const cy = size / 2;
+    const circumference = 2 * Math.PI * r;
+    let offset = 0;
+    const circles = items
+      .map((it) => {
+        const frac = it.count / total;
+        const dash = Math.max(frac * circumference, frac > 0 ? 0.5 : 0);
+        const seg = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${it.color}" stroke-width="${thickness}" stroke-dasharray="${dash} ${circumference - dash}" stroke-dashoffset="${-offset}"></circle>`;
+        offset += dash;
+        return seg;
       })
       .join("");
-
-    container.querySelectorAll(".item").forEach((el) => {
-      const id = el.dataset.id;
-      const openBtn = el.querySelector('[data-action="open"]');
-      if (openBtn) {
-        openBtn.addEventListener("click", async () => {
-          const map = await getEmailFolders();
-          if (map[id]) window.location.href = map[id].url;
-        });
-      }
-      const removeBtn = el.querySelector('[data-action="remove"]');
-      if (removeBtn) {
-        removeBtn.addEventListener("click", async () => {
-          const map = await getEmailFolders();
-          delete map[id];
-          await saveEmailFolders(map);
-          renderFolderGroups();
-        });
-      }
-    });
-    container.querySelectorAll("[data-delete-folder]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const name = btn.dataset.deleteFolder;
-        const folders2 = (await getFolders()).filter((f) => f !== name);
-        await saveFolders(folders2);
-        const map = await getEmailFolders();
-        Object.keys(map).forEach((id) => {
-          if (map[id].folder === name) delete map[id];
-        });
-        await saveEmailFolders(map);
-        populateFolderSelect();
-        renderFolderGroups();
-      });
-    });
+    return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+      <g transform="rotate(-90 ${cx} ${cy})">${circles}</g>
+      <circle cx="${cx}" cy="${cy}" r="${r - thickness / 2 - 3}" fill="#fff"></circle>
+      <text x="${cx}" y="${cy - 3}" text-anchor="middle" font-size="16" font-weight="800" fill="#20242B">${total}</text>
+      <text x="${cx}" y="${cy + 13}" text-anchor="middle" font-size="8.5" fill="#5B6472">emails</text>
+    </svg>`;
   }
 
-  $("#ia-folder-create").addEventListener("click", async () => {
-    const input = $("#ia-folder-new");
-    const name = input.value.trim();
-    if (!name) return;
-    const folders = await getFolders();
-    if (!folders.some((f) => f.toLowerCase() === name.toLowerCase())) {
-      folders.push(name);
-      await saveFolders(folders);
-    }
-    input.value = "";
-    populateFolderSelect();
-    renderFolderGroups();
-  });
-
-  $("#ia-folder-assign").addEventListener("click", async () => {
-    const statusEl = $("#ia-folder-status");
-    const folder = $("#ia-folder-select").value;
-    if (!folder) {
-      statusEl.textContent = "Create a folder first.";
+  function renderContactChart(containerId, data, emptyLabel) {
+    const el = $(containerId);
+    if (!el) return;
+    if (!data || !data.counts || Object.keys(data.counts).length === 0) {
+      el.innerHTML = `<p class="empty">${emptyLabel}</p>`;
       return;
     }
-    const info = currentEmailInfo();
-    if (!info) {
-      statusEl.textContent = "Open a specific email in the reading pane first.";
-      return;
-    }
-    const map = await getEmailFolders();
-    map[info.id] = { folder, subject: info.subject, sender: info.sender, url: info.url, assignedAt: new Date().toISOString() };
-    await saveEmailFolders(map);
-    statusEl.textContent = `Assigned to "${folder}".`;
-    renderFolderGroups();
-  });
-
-  populateFolderSelect();
-  renderFolderGroups();
-
-  /* =========================================================
-     2) MEETING-REQUEST EXTRACTOR
-     Lightweight regex-based date/time extraction (no external
-     libraries, since MV3 extensions can't load remote scripts).
-
-     Strategy: find all "date anchors" (a day, however phrased) and all
-     "time anchors" (a clock time, however phrased) separately, each with
-     their character position in the text, then pair up anchors that sit
-     close together. This catches far more real-world phrasing than a
-     single combined regex — e.g. "let's sync Thursday morning", "how
-     about 2-3pm on the 12th?", "next Tue at noon", "in 3 days at 10:30",
-     "Fri 9/12 2:00 PM ET", or a bare "3pm works for me" with no date.
-     ========================================================= */
-  const MONTH_NAMES = ["january","february","march","april","may","june","july","august","september","october","november","december"];
-  const MONTH_ABBR = { jan:"january", feb:"february", mar:"march", apr:"april", jun:"june", jul:"july", aug:"august", sep:"september", sept:"september", oct:"october", nov:"november", dec:"december" };
-  const MONTHS_RE_PART = "january|february|march|april|may|june|july|august|september|october|november|december|jan\\.?|feb\\.?|mar\\.?|apr\\.?|jun\\.?|jul\\.?|aug\\.?|sept?\\.?|oct\\.?|nov\\.?|dec\\.?";
-  const WEEKDAYS = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
-  const WEEKDAYS_RE_PART = "sunday|monday|tuesday|wednesday|thursday|friday|saturday|sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat";
-  const MEETING_KEYWORDS = /\b(meet|meeting|call|sync|chat|catch up|discuss|standup|stand-up|invite|schedule|available|works for me|touch base|zoom|teams call)\b/i;
-
-  function monthIndexFromName(raw) {
-    const name = raw.toLowerCase().replace(/\.$/, "");
-    const full = MONTH_ABBR[name] || name;
-    return MONTH_NAMES.indexOf(full);
-  }
-  function weekdayIndexFromName(raw) {
-    const name = raw.toLowerCase();
-    const map = { sun:0, mon:1, tue:2, tues:2, wed:3, thu:4, thur:4, thurs:4, fri:5, sat:6 };
-    if (map[name] !== undefined) return map[name];
-    return WEEKDAYS.indexOf(name);
-  }
-  function to12to24(hourStr, meridiem) {
-    let h = parseInt(hourStr, 10);
-    if (meridiem) {
-      const mer = meridiem.toLowerCase();
-      if (mer === "pm" && h < 12) h += 12;
-      if (mer === "am" && h === 12) h = 0;
-    }
-    return h;
-  }
-
-  /* ---- Date anchors ---- */
-  // Patterns are tried most-specific-first; a later, less-specific match whose
-  // characters overlap an already-accepted anchor is dropped (e.g. the numeric
-  // pattern shouldn't also match the "08-12" tail of an ISO date, and a bare
-  // weekday name shouldn't also fire inside "Monday, June 10").
-  function findDateAnchors(text) {
-    const anchors = [];
-    const consumed = [];
-    const today = new Date();
-
-    function overlaps(index, length) {
-      const s = index, e = index + length;
-      return consumed.some(([cs, ce]) => s < ce && e > cs);
-    }
-    function push(index, length, label, y, mo, d) {
-      if (overlaps(index, length)) return;
-      consumed.push([index, index + length]);
-      anchors.push({ index, length, label: label.trim(), y, mo, d });
-    }
-
-    let m;
-
-    // "June 10", "Jun. 10th, 2026"
-    const monthDayRe = new RegExp(`\\b(${MONTHS_RE_PART})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s*(\\d{4}))?\\b`, "gi");
-    while ((m = monthDayRe.exec(text)) !== null) {
-      const mi = monthIndexFromName(m[1]);
-      if (mi < 0) continue;
-      push(m.index, m[0].length, m[0], m[3] ? parseInt(m[3], 10) : today.getFullYear(), mi, parseInt(m[2], 10));
-    }
-
-    // "10 June", "10th of June, 2026"
-    const dayMonthRe = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?(${MONTHS_RE_PART})(?:,?\\s*(\\d{4}))?\\b`, "gi");
-    while ((m = dayMonthRe.exec(text)) !== null) {
-      const mi = monthIndexFromName(m[2]);
-      if (mi < 0) continue;
-      push(m.index, m[0].length, m[0], m[3] ? parseInt(m[3], 10) : today.getFullYear(), mi, parseInt(m[1], 10));
-    }
-
-    // ISO "2026-06-10"
-    const isoRe = /\b(\d{4})-(\d{1,2})-(\d{1,2})\b/g;
-    while ((m = isoRe.exec(text)) !== null) {
-      push(m.index, m[0].length, m[0], +m[1], +m[2] - 1, +m[3]);
-    }
-
-    // "the 12th", "on the 3rd" — day-of-month only, no explicit month named.
-    const ordinalOnlyRe = /\bthe\s+(\d{1,2})(st|nd|rd|th)\b/gi;
-    while ((m = ordinalOnlyRe.exec(text)) !== null) {
-      const day = parseInt(m[1], 10);
-      if (day < 1 || day > 31) continue;
-      const t = new Date(today.getFullYear(), today.getMonth(), day);
-      if (t < today) t.setMonth(t.getMonth() + 1); // roll to next month if this month's date already passed
-      push(m.index, m[0].length, m[0], t.getFullYear(), t.getMonth(), t.getDate());
-    }
-
-    // Numeric "6/10", "06-10-2026" (assumes month/day, the common US convention)
-    const numericRe = /\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/g;
-    while ((m = numericRe.exec(text)) !== null) {
-      if (/^\d{1,2}[\/\-]7$/.test(m[0])) continue; // skip "24/7" etc.
-      const mo = parseInt(m[1], 10) - 1;
-      const d = parseInt(m[2], 10);
-      if (mo < 0 || mo > 11 || d < 1 || d > 31) continue;
-      let y = m[3] ? parseInt(m[3], 10) : today.getFullYear();
-      if (y < 100) y += 2000;
-      push(m.index, m[0].length, m[0], y, mo, d);
-    }
-
-    // "next Friday", "this Tuesday", "coming Mon", or a bare weekday like "Friday works great"
-    const weekdayRe = new RegExp(`\\b(next|this|coming)?\\s*(${WEEKDAYS_RE_PART})\\b`, "gi");
-    while ((m = weekdayRe.exec(text)) !== null) {
-      const wd = weekdayIndexFromName(m[2]);
-      if (wd < 0) continue;
-      const qualifier = (m[1] || "").toLowerCase();
-      const base = new Date(today);
-      let diff = ((wd - base.getDay()) + 7) % 7; // 0 = that weekday is today
-      if (qualifier === "next") diff = diff === 0 ? 7 : diff + 7; // "next Friday" = the Friday of next week
-      base.setDate(base.getDate() + diff);
-      push(m.index, m[0].length, m[0], base.getFullYear(), base.getMonth(), base.getDate());
-    }
-
-    // "today", "tomorrow"
-    const todayRe = /\btoday\b/gi;
-    while ((m = todayRe.exec(text)) !== null) {
-      push(m.index, m[0].length, m[0], today.getFullYear(), today.getMonth(), today.getDate());
-    }
-    const tomorrowRe = /\btomorrow\b/gi;
-    while ((m = tomorrowRe.exec(text)) !== null) {
-      const t = new Date(today);
-      t.setDate(t.getDate() + 1);
-      push(m.index, m[0].length, m[0], t.getFullYear(), t.getMonth(), t.getDate());
-    }
-
-    // "in 3 days", "in 2 weeks"
-    const inNRe = /\bin\s+(\d+)\s+(day|days|week|weeks)\b/gi;
-    while ((m = inNRe.exec(text)) !== null) {
-      const n = parseInt(m[1], 10);
-      const unit = m[2].startsWith("week") ? 7 : 1;
-      const t = new Date(today);
-      t.setDate(t.getDate() + n * unit);
-      push(m.index, m[0].length, m[0], t.getFullYear(), t.getMonth(), t.getDate());
-    }
-
-    // Next-week shorthand ("next week" with no specific day) — default to next week's Monday.
-    const nextWeekRe = /\bnext week\b/gi;
-    while ((m = nextWeekRe.exec(text)) !== null) {
-      const base = new Date(today);
-      const daysSinceMonday = (base.getDay() + 6) % 7; // Mon=0..Sun=6
-      const mondayThisWeek = new Date(base);
-      mondayThisWeek.setDate(base.getDate() - daysSinceMonday);
-      const mondayNextWeek = new Date(mondayThisWeek);
-      mondayNextWeek.setDate(mondayThisWeek.getDate() + 7);
-      push(m.index, m[0].length, m[0], mondayNextWeek.getFullYear(), mondayNextWeek.getMonth(), mondayNextWeek.getDate());
-    }
-
-    return anchors;
-  }
-
-  /* ---- Time anchors (single times and ranges) ---- */
-  function findTimeAnchors(text) {
-    const anchors = []; // {index, length, label, h1, m1, h2?, m2?}
-    let m;
-
-    // Ranges first so the single-time pass below doesn't also match half of them:
-    // "2-3pm", "2:00-3:30pm", "2pm to 3pm", "between 2 and 3pm"
-    const rangeRe = /\b(?:between\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:-|–|to|and)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/gi;
-    const consumed = [];
-    while ((m = rangeRe.exec(text)) !== null) {
-      const endMer = m[6];
-      const startMer = m[3] || endMer; // "2-3pm" implies 2 shares 3's meridiem unless stated
-      const h1 = to12to24(m[1], startMer);
-      const h2 = to12to24(m[4], endMer);
-      anchors.push({
-        index: m.index, length: m[0].length, label: m[0].trim(),
-        h1, m1: m[2] ? parseInt(m[2], 10) : 0,
-        h2, m2: m[5] ? parseInt(m[5], 10) : 0
-      });
-      consumed.push([m.index, m.index + m[0].length]);
-    }
-
-    const isConsumed = (idx) => consumed.some(([s, e]) => idx >= s && idx < e);
-
-    // Single "3pm", "3:30 PM"
-    const timeRe = /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/gi;
-    while ((m = timeRe.exec(text)) !== null) {
-      if (isConsumed(m.index)) continue;
-      anchors.push({ index: m.index, length: m[0].length, label: m[0].trim(), h1: to12to24(m[1], m[3]), m1: m[2] ? parseInt(m[2], 10) : 0 });
-    }
-
-    // 24-hour "14:00", "09:30"
-    const time24Re = /\b([01]?\d|2[0-3]):([0-5]\d)\b/g;
-    while ((m = time24Re.exec(text)) !== null) {
-      if (isConsumed(m.index)) continue;
-      anchors.push({ index: m.index, length: m[0].length, label: m[0], h1: parseInt(m[1], 10), m1: parseInt(m[2], 10) });
-    }
-
-    // "noon", "midnight"
-    const noonRe = /\b(noon|midnight)\b/gi;
-    while ((m = noonRe.exec(text)) !== null) {
-      const isNoon = m[1].toLowerCase() === "noon";
-      anchors.push({ index: m.index, length: m[0].length, label: m[0], h1: isNoon ? 12 : 0, m1: 0 });
-    }
-
-    return anchors;
-  }
-
-  function extractCandidates(text) {
-    const found = [];
-    const seen = new Set();
-    function addCandidate(label, start, end) {
-      if (!start || isNaN(start.getTime())) return;
-      const key = start.toISOString() + "|" + (end ? end.toISOString() : "");
-      if (seen.has(key)) return;
-      seen.add(key);
-      found.push({ label: label.trim(), date: start, end: end || null });
-    }
-
-    const dateAnchors = findDateAnchors(text);
-    const timeAnchors = findTimeAnchors(text);
-    const usedTimeIdx = new Set();
-    const NEAR = 45; // chars
-
-    // Pair each date anchor with the closest nearby time anchor.
-    dateAnchors.forEach((d) => {
-      let best = null, bestDist = Infinity;
-      timeAnchors.forEach((t, i) => {
-        if (usedTimeIdx.has(i)) return;
-        const dist = Math.min(
-          Math.abs(t.index - (d.index + d.length)),
-          Math.abs(d.index - (t.index + t.length))
-        );
-        if (dist <= NEAR && dist < bestDist) { best = { t, i }; bestDist = dist; }
-      });
-      const start = new Date(d.y, d.mo, d.d, 9, 0, 0, 0); // default 9:00 AM if no time nearby
-      let end = null;
-      let label = d.label;
-      if (best) {
-        usedTimeIdx.add(best.i);
-        start.setHours(best.t.h1, best.t.m1, 0, 0);
-        if (best.t.h2 !== undefined) {
-          end = new Date(d.y, d.mo, d.d, best.t.h2, best.t.m2, 0, 0);
-        }
-        label = d.index < best.t.index ? `${d.label} ${best.t.label}` : `${best.t.label} ${d.label}`;
-      }
-      addCandidate(label, start, end);
-    });
-
-    // Time anchors not claimed by any date, but sitting near a meeting-ish keyword,
-    // are assumed to mean "today" (or "tomorrow" if that time already passed today).
-    timeAnchors.forEach((t, i) => {
-      if (usedTimeIdx.has(i)) return;
-      const windowText = text.slice(Math.max(0, t.index - 50), t.index + t.length + 20);
-      if (!MEETING_KEYWORDS.test(windowText)) return;
-      const now = new Date();
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), t.h1, t.m1, 0, 0);
-      let end = null;
-      let dayLabel = "today";
-      if (start.getTime() < now.getTime()) {
-        start.setDate(start.getDate() + 1);
-        dayLabel = "tomorrow";
-      }
-      if (t.h2 !== undefined) {
-        end = new Date(start.getFullYear(), start.getMonth(), start.getDate(), t.h2, t.m2, 0, 0);
-      }
-      addCandidate(`${t.label} (${dayLabel})`, start, end);
-    });
-
-    // Order by when the phrase appears in the email, most relevant first.
-    return found.slice(0, 8);
-  }
-
-  $("#ia-scan").addEventListener("click", () => {
-    const resultsEl = $("#ia-meeting-results");
-    const bodyEl = qFirst(CONFIG.readingBodySelectors);
-    if (!bodyEl) {
-      resultsEl.innerHTML = '<p class="empty">Open an email in the reading pane, then scan.</p>';
-      return;
-    }
-    const subjectEl = qFirst(CONFIG.readingSubjectSelectors);
-    const subject = subjectEl ? subjectEl.textContent.trim() : "Meeting";
-    const candidates = extractCandidates(bodyEl.innerText || "");
-
-    if (candidates.length === 0) {
-      resultsEl.innerHTML = '<p class="empty">No dates or times found in this email.</p>';
-      return;
-    }
-
-    resultsEl.innerHTML = candidates
-      .map((c, i) => {
-        const rangeNote = c.end ? ` – ${c.end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "";
-        return `
-      <div class="item" data-idx="${i}">
-        <div><strong>"${escapeHtml(c.label)}"</strong></div>
-        <div class="muted">${c.date.toLocaleString()}${rangeNote}</div>
-        <button class="secondary" data-action="add">Add to Calendar</button>
-      </div>`;
+    const items = topEntries(data.counts, 5);
+    const grandTotal = Object.values(data.counts).reduce((a, b) => a + b, 0);
+    const legend = items
+      .map((it) => {
+        const pct = Math.round((it.count / grandTotal) * 100);
+        return `<li><span class="dot" style="background:${it.color}"></span>${escapeHtml(it.label)} <span class="muted">${it.count} &middot; ${pct}%</span></li>`;
       })
       .join("");
-
-    resultsEl.querySelectorAll(".item").forEach((el) => {
-      const idx = parseInt(el.dataset.idx, 10);
-      el.querySelector('[data-action="add"]').addEventListener("click", () => {
-        const start = candidates[idx].date;
-        const end = candidates[idx].end || new Date(start.getTime() + 60 * 60 * 1000);
-        const toISO = (d) =>
-          `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}T${String(
-            d.getHours()
-          ).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:00`;
-        const base = window.location.host.includes("live.com") ? "outlook.live.com" : "outlook.office.com";
-        const url =
-          `https://${base}/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent` +
-          `&startdt=${encodeURIComponent(toISO(start))}&enddt=${encodeURIComponent(toISO(end))}` +
-          `&subject=${encodeURIComponent(subject)}`;
-        window.open(url, "_blank");
-      });
-    });
-  });
-
-  /* =========================================================
-     3) REPLY-TONE CHECKER (manual + Send interception)
-     ========================================================= */
-  const PASSIVE_AGGRESSIVE_PHRASES = [
-    "per my last email", "as previously stated", "as i mentioned before",
-    "just to reiterate", "kindly note", "not sure if you saw my last email",
-    "per our conversation", "as i said", "again,", "obviously"
-  ];
-
-  function analyzeTone(text) {
-    const warnings = [];
-    const trimmed = (text || "").trim();
-    const lower = trimmed.toLowerCase();
-
-    if (trimmed.length > 0 && trimmed.length < 25) {
-      warnings.push("This message is very short — it may come across as curt.");
-    }
-    PASSIVE_AGGRESSIVE_PHRASES.forEach((phrase) => {
-      if (lower.includes(phrase)) warnings.push(`Possibly passive-aggressive phrase: "${phrase}"`);
-    });
-    if ((trimmed.match(/\b[A-Z]{4,}\b/g) || []).length > 0) {
-      warnings.push("Contains ALL-CAPS words, which can read as shouting.");
-    }
-    if ((trimmed.match(/!/g) || []).length >= 3) {
-      warnings.push("Multiple exclamation marks may read as overly intense.");
-    }
-    if (["kindly", "esteemed", "herewith"].some((w) => lower.includes(w))) {
-      warnings.push("Phrasing reads as overly formal/stiff for most email contexts.");
-    }
-    return warnings;
+    el.innerHTML = `
+      <div class="donut-row">
+        ${buildDonutSVG(items)}
+        <ul class="donut-legend">${legend}</ul>
+      </div>
+      <p class="muted" style="margin-top:6px;">Snapshot of ${data.rowCount} loaded message(s) &middot; ${new Date(data.scannedAt).toLocaleString()}</p>
+    `;
   }
 
-  function findActiveComposeBody() {
-    const boxes = qAllVisible(CONFIG.composeBodySelectors);
-    if (boxes.length === 0) return null;
-    // Prefer the currently focused box; otherwise the last (most recently opened) one.
-    return boxes.find((b) => b.contains(document.activeElement)) || boxes[boxes.length - 1];
+  async function refreshContactsTabs() {
+    const received = await storageGet(CONFIG.contactsReceivedStorageKey);
+    const sent = await storageGet(CONFIG.contactsSentStorageKey);
+    renderContactChart("#ia-contacts-received", received, "No inbox scan yet — open your Inbox and scan.");
+    renderContactChart("#ia-contacts-sent", sent, "No Sent scan yet — open Sent Items and scan.");
   }
 
-  $("#ia-tone-check").addEventListener("click", () => {
-    const resultsEl = $("#ia-tone-results");
-    const box = findActiveComposeBody();
-    if (!box) {
-      resultsEl.innerHTML = '<p class="empty">Open a compose or reply window first.</p>';
+  $("#ia-contacts-scan").addEventListener("click", async () => {
+    const statusEl = $("#ia-contacts-status");
+    const snap = scanContactsSnapshot();
+    if (Object.keys(snap.counts).length === 0) {
+      statusEl.textContent = "Couldn't read any names from the currently visible list — make sure a message list is open.";
       return;
     }
-    const warnings = analyzeTone(box.innerText);
-    resultsEl.innerHTML =
-      warnings.length === 0
-        ? '<p class="pill ok">Looks good — no tone issues detected.</p>'
-        : '<ul class="warning-list">' +
-          warnings.map((w) => `<li><span class="pill warn">Check</span> ${escapeHtml(w)}</li>`).join("") +
-          "</ul>";
+    if (snap.context === "sent") {
+      await storageSet(CONFIG.contactsSentStorageKey, snap);
+      statusEl.textContent = `Scanned ${snap.rowCount} sent message(s).`;
+    } else if (snap.context === "received") {
+      await storageSet(CONFIG.contactsReceivedStorageKey, snap);
+      statusEl.textContent = `Scanned ${snap.rowCount} inbox message(s).`;
+    } else {
+      statusEl.textContent = `Scanned ${snap.rowCount} message(s) but couldn't tell if this is Inbox or Sent Items — open one of those folders to save the result.`;
+      refreshContactsTabs();
+      return;
+    }
+    refreshContactsTabs();
   });
 
-  // Best-effort Send interception: OWA doesn't expose a "before send" event to
-  // page scripts, so this hooks the Send button's click in the capture phase.
-  let bypassOnce = false;
-  document.addEventListener(
-    "click",
-    (e) => {
-      if (bypassOnce) {
-        bypassOnce = false;
+  refreshContactsTabs();
+
+  /* =========================================================
+     2) MEETING COST CALCULATOR — a one-off estimate, a live
+     running stopwatch that ticks the cost up in real time, and a
+     saved history of past calculations.
+     ========================================================= */
+  function currencySymbol() {
+    const el = $("#ia-cost-currency");
+    return (el && el.value) || "$";
+  }
+  function computeHourlyRate(salary) {
+    return (salary / 2080) * 1.3; // +30% for benefits/overhead
+  }
+  async function getCostHistory() {
+    return (await storageGet(CONFIG.costHistoryStorageKey)) || [];
+  }
+  async function saveCostHistory(list) {
+    await storageSet(CONFIG.costHistoryStorageKey, list.slice(0, 20));
+  }
+  function renderCostHistory() {
+    getCostHistory().then((history) => {
+      $("#ia-cost-history-count").textContent = history.length;
+      const el = $("#ia-cost-history");
+      if (history.length === 0) {
+        el.innerHTML = '<p class="empty">No meetings calculated yet.</p>';
         return;
       }
-      const target = e.target.closest(CONFIG.sendButtonSelectors.join(","));
-      if (!target) return;
-
-      const box = findActiveComposeBody();
-      if (!box) return;
-      const warnings = analyzeTone(box.innerText);
-      if (warnings.length === 0) return;
-
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      showToneWarningOverlay(warnings, target);
-    },
-    true
-  );
-
-  function showToneWarningOverlay(warnings, sendButton) {
-    const overlay = document.createElement("div");
-    overlay.style.cssText =
-      "position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:2147483001; display:flex; align-items:center; justify-content:center;";
-    const box = document.createElement("div");
-    box.style.cssText =
-      "all:initial; background:#fff; font-family:'Segoe UI',Arial,sans-serif; border-radius:8px; padding:18px 20px; max-width:360px; box-shadow:0 8px 30px rgba(0,0,0,.3); color:#20242B;";
-    box.innerHTML = `
-      <h3 style="margin:0 0 8px; font-size:14px;">Tone check before sending</h3>
-      <ul style="margin:0 0 12px; padding-left:18px; font-size:12.5px;">
-        ${warnings.map((w) => `<li style="margin-bottom:5px;">${escapeHtml(w)}</li>`).join("")}
-      </ul>
-      <div style="text-align:right;">
-        <button id="ia-cancel" style="background:#fff; border:1px solid #ccc; border-radius:5px; padding:6px 10px; margin-right:8px; cursor:pointer; font-size:12px;">Go back &amp; edit</button>
-        <button id="ia-sendanyway" style="background:#1B4F8C; color:#fff; border:none; border-radius:5px; padding:6px 12px; cursor:pointer; font-size:12px;">Send anyway</button>
-      </div>
-    `;
-    overlay.appendChild(box);
-    document.body.appendChild(overlay);
-    overlay.querySelector("#ia-cancel").addEventListener("click", () => overlay.remove());
-    overlay.querySelector("#ia-sendanyway").addEventListener("click", () => {
-      overlay.remove();
-      bypassOnce = true;
-      sendButton.click();
+      el.innerHTML = history
+        .slice(0, 8)
+        .map(
+          (h) => `<div class="item">
+            <strong style="font-size:11.5px;">${h.symbol}${h.cost.toFixed(0)}</strong>
+            <span class="muted"> &middot; ${h.attendees} attendee(s) &middot; ${h.minutes}min &middot; ${escapeHtml(h.recurrenceLabel)}</span>
+            <div class="muted">${new Date(h.ts).toLocaleString()}</div>
+          </div>`
+        )
+        .join("");
     });
   }
+  renderCostHistory();
 
-  /* =========================================================
-     4) MEETING COST CALCULATOR
-     ========================================================= */
-  $("#ia-cost-calc").addEventListener("click", () => {
+  $("#ia-cost-calc").addEventListener("click", async () => {
     const attendees = Math.max(1, parseInt($("#ia-cost-attendees").value, 10) || 1);
     const salary = parseInt($("#ia-cost-salary").value, 10);
     const minutes = Math.max(1, parseInt($("#ia-cost-duration").value, 10) || 30);
-    const hourlyRate = (salary / 2080) * 1.3; // +30% for benefits/overhead
+    const recurTimesPerYear = parseInt($("#ia-cost-recurrence").value, 10) || 1;
+    const symbol = currencySymbol();
+    const hourlyRate = computeHourlyRate(salary);
     const hours = minutes / 60;
     const cost = attendees * hourlyRate * hours;
+    const annual = cost * recurTimesPerYear;
+    const recurrenceLabel = { "1": "one-time", "52": "weekly", "26": "bi-weekly", "12": "monthly" }[String(recurTimesPerYear)] || "one-time";
 
-    $("#ia-cost-result").textContent = `$${cost.toFixed(0)}`;
+    $("#ia-cost-result").textContent = `${symbol}${cost.toFixed(0)}`;
     $("#ia-cost-note").textContent =
-      `${attendees} attendee(s) x ~$${hourlyRate.toFixed(0)}/hr (incl. ~30% overhead) x ${hours.toFixed(2)} hr(s). ` +
-      `Weekly recurring would run ~$${(cost * 52).toLocaleString(undefined, { maximumFractionDigits: 0 })}/year.`;
+      `${attendees} attendee(s) × ~${symbol}${hourlyRate.toFixed(0)}/hr (incl. ~30% overhead) × ${hours.toFixed(2)} hr(s).` +
+      (recurTimesPerYear > 1 ? ` If ${recurrenceLabel}, that's ~${symbol}${annual.toLocaleString(undefined, { maximumFractionDigits: 0 })}/year.` : "");
+    $("#ia-cost-fun").textContent = `≈ ${Math.max(1, Math.round(cost / 5))} coffee run(s) worth of budget ☕ — a rough illustration, not a real conversion.`;
+
+    const history = await getCostHistory();
+    history.unshift({ ts: new Date().toISOString(), attendees, minutes, cost, symbol, recurrenceLabel });
+    await saveCostHistory(history);
+    renderCostHistory();
+  });
+
+  $("#ia-cost-history-clear").addEventListener("click", async () => {
+    await saveCostHistory([]);
+    renderCostHistory();
+  });
+
+  /* ---- Live meeting timer ---- */
+  function formatElapsed(totalSeconds) {
+    const m = Math.floor(totalSeconds / 60).toString().padStart(2, "0");
+    const s = Math.floor(totalSeconds % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
+  }
+  function tickLiveCost() {
+    const attendees = Math.max(1, parseInt($("#ia-cost-attendees").value, 10) || 1);
+    const salary = parseInt($("#ia-cost-salary").value, 10);
+    const symbol = currencySymbol();
+    const hourlyRate = computeHourlyRate(salary);
+    const elapsedSeconds = liveElapsedBeforePause + (liveStartedAt ? (Date.now() - liveStartedAt) / 1000 : 0);
+    const cost = attendees * hourlyRate * (elapsedSeconds / 3600);
+    $("#ia-cost-live").textContent = `${symbol}${cost.toFixed(2)}`;
+    $("#ia-cost-live-elapsed").textContent = formatElapsed(elapsedSeconds);
+  }
+  $("#ia-cost-live-toggle").addEventListener("click", async () => {
+    const btn = $("#ia-cost-live-toggle");
+    if (liveTimerInterval) {
+      clearInterval(liveTimerInterval);
+      liveTimerInterval = null;
+      liveElapsedBeforePause += liveStartedAt ? (Date.now() - liveStartedAt) / 1000 : 0;
+      liveStartedAt = null;
+      btn.textContent = "▶ Resume";
+      if (liveElapsedBeforePause >= 30) {
+        const attendees = Math.max(1, parseInt($("#ia-cost-attendees").value, 10) || 1);
+        const salary = parseInt($("#ia-cost-salary").value, 10);
+        const symbol = currencySymbol();
+        const hourlyRate = computeHourlyRate(salary);
+        const cost = attendees * hourlyRate * (liveElapsedBeforePause / 3600);
+        const history = await getCostHistory();
+        history.unshift({
+          ts: new Date().toISOString(),
+          attendees,
+          minutes: Math.round(liveElapsedBeforePause / 60),
+          cost,
+          symbol,
+          recurrenceLabel: "live timer"
+        });
+        await saveCostHistory(history);
+        renderCostHistory();
+      }
+    } else {
+      liveStartedAt = Date.now();
+      liveTimerInterval = setInterval(tickLiveCost, 500);
+      btn.textContent = "⏸ Pause";
+    }
+  });
+  $("#ia-cost-live-reset").addEventListener("click", () => {
+    clearInterval(liveTimerInterval);
+    liveTimerInterval = null;
+    liveStartedAt = null;
+    liveElapsedBeforePause = 0;
+    $("#ia-cost-live-toggle").textContent = "▶ Start";
+    $("#ia-cost-live").textContent = `${currencySymbol()}0.00`;
+    $("#ia-cost-live-elapsed").textContent = "00:00";
   });
 
   /* =========================================================
-     5) DOWNLOAD EMAIL AS PDF (via native print-to-PDF)
+     3) EXPORT — PDF via the native print dialog, plus HTML,
+     Markdown, and plain-text file downloads generated locally
+     with no external library and no network request.
      ========================================================= */
-  $("#ia-pdf").addEventListener("click", () => {
-    const statusEl = $("#ia-pdf-status");
+  function currentReadingEmail() {
     const bodyEl = qFirst(CONFIG.readingBodySelectors);
+    if (!bodyEl) return null;
     const subjectEl = qFirst(CONFIG.readingSubjectSelectors);
-    if (!bodyEl) {
+    const subject = subjectEl ? subjectEl.textContent.trim() : "Email";
+    const sender = findSenderName() || "Unknown sender";
+    return { subject, sender, bodyText: bodyEl.innerText || "" };
+  }
+
+  $("#ia-export-pdf").addEventListener("click", () => {
+    const statusEl = $("#ia-export-status");
+    const info = currentReadingEmail();
+    if (!info) {
       statusEl.textContent = "Open an email in the reading pane first.";
       return;
     }
-    const subject = subjectEl ? subjectEl.textContent.trim() : "Email";
-    const sender = findSenderName() || "Unknown sender";
     const win = window.open("", "_blank");
     if (!win) {
       statusEl.textContent = "Pop-up blocked — allow pop-ups for Outlook to export.";
       return;
     }
     win.document.write(`
-      <html><head><title>${escapeHtml(subject)}</title>
+      <html><head><title>${escapeHtml(info.subject)}</title>
       <style>
         body{font-family:Arial,sans-serif; padding:32px; color:#111; max-width:700px; margin:auto;}
         h1{font-size:18px; border-bottom:1px solid #ccc; padding-bottom:10px;}
@@ -1218,14 +1044,230 @@
         .body{font-size:13px; line-height:1.6; white-space:pre-wrap;}
       </style></head>
       <body>
-        <h1>${escapeHtml(subject)}</h1>
-        <div class="meta"><strong>From:</strong> ${escapeHtml(sender)}</div>
+        <h1>${escapeHtml(info.subject)}</h1>
+        <div class="meta"><strong>From:</strong> ${escapeHtml(info.sender)}</div>
         <div class="meta exported">Exported ${new Date().toLocaleString()} from Outlook Web</div>
-        <div class="body">${escapeHtml(bodyEl.innerText || "")}</div>
+        <div class="body">${escapeHtml(info.bodyText)}</div>
       </body></html>
     `);
     win.document.close();
-    statusEl.textContent = "Opened printable version — choose \"Save as PDF\" in the print dialog.";
+    statusEl.textContent = 'Opened printable version — choose "Save as PDF" in the print dialog.';
     win.onload = () => win.print();
+  });
+
+  $("#ia-export-html").addEventListener("click", () => {
+    const statusEl = $("#ia-export-status");
+    const info = currentReadingEmail();
+    if (!info) {
+      statusEl.textContent = "Open an email in the reading pane first.";
+      return;
+    }
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(info.subject)}</title>
+      <style>body{font-family:Arial,sans-serif; padding:32px; color:#111; max-width:700px; margin:auto;}
+      h1{font-size:18px; border-bottom:1px solid #ccc; padding-bottom:10px;}
+      .meta{color:#666; font-size:12px;} .body{font-size:13px; line-height:1.6; white-space:pre-wrap; margin-top:16px;}</style>
+      </head><body><h1>${escapeHtml(info.subject)}</h1>
+      <div class="meta">From: ${escapeHtml(info.sender)} &middot; Exported ${new Date().toLocaleString()}</div>
+      <div class="body">${escapeHtml(info.bodyText)}</div></body></html>`;
+    downloadBlob(`${safeFilename(info.subject)}.html`, html, "text/html");
+    statusEl.textContent = "Downloaded as HTML.";
+  });
+
+  $("#ia-export-md").addEventListener("click", () => {
+    const statusEl = $("#ia-export-status");
+    const info = currentReadingEmail();
+    if (!info) {
+      statusEl.textContent = "Open an email in the reading pane first.";
+      return;
+    }
+    const md = `# ${info.subject}\n\n**From:** ${info.sender}  \n**Exported:** ${new Date().toLocaleString()}\n\n---\n\n${info.bodyText}\n`;
+    downloadBlob(`${safeFilename(info.subject)}.md`, md, "text/markdown");
+    statusEl.textContent = "Downloaded as Markdown.";
+  });
+
+  $("#ia-export-txt").addEventListener("click", () => {
+    const statusEl = $("#ia-export-status");
+    const info = currentReadingEmail();
+    if (!info) {
+      statusEl.textContent = "Open an email in the reading pane first.";
+      return;
+    }
+    const txt = `${info.subject}\nFrom: ${info.sender}\nExported: ${new Date().toLocaleString()}\n\n${info.bodyText}\n`;
+    downloadBlob(`${safeFilename(info.subject)}.txt`, txt, "text/plain");
+    statusEl.textContent = "Downloaded as plain text.";
+  });
+
+  /* =========================================================
+     4) SCHEDULE SEND QUICK-PICKER
+     One-click presets (Tomorrow 8am, Monday 9am, Friday EOD),
+     both injected next to Outlook's own Send button while
+     composing AND available from the panel's Schedule tab.
+
+     Fully client-side, no backend — but genuinely reliable, silent
+     auto-scheduling isn't possible without one of two things this
+     extension deliberately avoids: (a) depending on Outlook's
+     undocumented, frequently-churning "Send later" dialog markup to
+     blindly fill in a date, or (b) a background service worker that
+     holds your unsent draft and fires it later, which would mean
+     trusting a browser extension to hold and eventually transmit
+     the contents of your email — more risk than a "quick preset"
+     feature should carry. So instead this drives Outlook's OWN
+     native Send-later flow as far as it can (opening the menu, the
+     dialog, and — best effort — picking the right calendar day) and
+     always leaves Outlook's own dialog open for you to confirm the
+     final time and hit Outlook's own Send yourself. If any step
+     can't find what it's looking for, it copies the computed
+     date/time to your clipboard so you can paste/select it manually
+     instead of guessing wrong silently.
+     ========================================================= */
+  const SCHEDULE_PRESETS = [
+    { id: "tomorrow8", label: "Tomorrow 8am" },
+    { id: "monday9", label: "Monday 9am" },
+    { id: "fridayEod", label: "Friday EOD" }
+  ];
+
+  function computePresetDate(preset) {
+    const now = new Date();
+    if (preset === "tomorrow8") {
+      const d = new Date(now);
+      d.setDate(d.getDate() + 1);
+      d.setHours(8, 0, 0, 0);
+      return d;
+    }
+    if (preset === "monday9") {
+      const d = new Date(now);
+      const daysUntilMonday = ((1 - d.getDay()) + 7) % 7 || 7; // always the *next* Monday
+      d.setDate(d.getDate() + daysUntilMonday);
+      d.setHours(9, 0, 0, 0);
+      return d;
+    }
+    if (preset === "fridayEod") {
+      const d = new Date(now);
+      const daysUntilFriday = ((5 - d.getDay()) + 7) % 7; // 0 if today IS Friday
+      d.setDate(d.getDate() + daysUntilFriday);
+      d.setHours(17, 0, 0, 0);
+      if (d.getTime() <= now.getTime()) d.setDate(d.getDate() + 7); // this Friday's EOD already passed
+      return d;
+    }
+    return now;
+  }
+
+  function formatPresetTarget(d) {
+    return (
+      d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) +
+      " · " +
+      d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    );
+  }
+
+  function findComposeSendButton() {
+    const boxes = qAllVisible(CONFIG.sendButtonSelectors);
+    return boxes.length ? boxes[boxes.length - 1] : null;
+  }
+
+  async function attemptNativeScheduleSend(sendBtn, targetDate, statusEl) {
+    statusEl.textContent = "Opening Outlook's schedule menu…";
+    const targetText = formatPresetTarget(targetDate);
+
+    // Step 1: find a "more send options" caret near the Send button.
+    let caret = null;
+    for (const sel of CONFIG.scheduleSendMoreOptionsSelectors) {
+      const candidates = qAllVisible([sel]);
+      if (candidates.length) {
+        caret =
+          candidates.find((c) => Math.abs(c.getBoundingClientRect().left - sendBtn.getBoundingClientRect().right) < 80) ||
+          candidates[0];
+        break;
+      }
+    }
+    if (!caret) {
+      await copyToClipboard(targetText);
+      statusEl.textContent = `Couldn't find Outlook's schedule-send arrow automatically. Target time (${targetText}) copied — look for the small arrow next to Send and paste it in.`;
+      return;
+    }
+    caret.click();
+    await new Promise((r) => setTimeout(r, 250));
+
+    // Step 2: find a menu item mentioning "send later" / "schedule".
+    const menuItems = Array.from(document.querySelectorAll('[role="menuitem"], [role="option"]'));
+    const sendLater = menuItems.find((mi) => /send later|schedule send|custom time/i.test(mi.textContent || ""));
+    if (!sendLater) {
+      await copyToClipboard(targetText);
+      statusEl.textContent = `Opened Outlook's send menu but couldn't find "Send later" automatically. Target time (${targetText}) copied to your clipboard.`;
+      return;
+    }
+    sendLater.click();
+    await new Promise((r) => setTimeout(r, 300));
+
+    // Step 3: best effort — Fluent UI calendars label each day button with
+    // the full accessible date, so look for one matching our target date.
+    const fullLabel = targetDate.toLocaleDateString(undefined, {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      year: "numeric"
+    });
+    const dayBtn = Array.from(document.querySelectorAll("button[aria-label]")).find((b) =>
+      (b.getAttribute("aria-label") || "").toLowerCase().includes(fullLabel.toLowerCase())
+    );
+    await copyToClipboard(targetText);
+    if (dayBtn) {
+      dayBtn.click();
+      statusEl.textContent = `Picked ${targetText} in Outlook's calendar — set the time and confirm "Send" in Outlook's own dialog.`;
+    } else {
+      statusEl.textContent = `Opened Outlook's schedule dialog — target time (${targetText}) copied to your clipboard since the date couldn't be auto-selected. Paste/select it, then confirm in Outlook's own dialog.`;
+    }
+  }
+
+  function injectScheduleToolbar(sendBtn) {
+    if (!sendBtn || sendBtn.dataset.iaScheduleInjected) return;
+    const container = document.createElement("span");
+    container.setAttribute("data-ia-schedule-toolbar", "1");
+    const wrap = document.createElement("span");
+    wrap.style.cssText =
+      "all:initial; display:inline-flex; gap:6px; align-items:center; margin:0 8px; font-family:'Segoe UI',Arial,sans-serif; vertical-align:middle;";
+    wrap.innerHTML = SCHEDULE_PRESETS.map(
+      (p) =>
+        `<button data-preset="${p.id}" style="all:initial; cursor:pointer; font-family:inherit; font-size:11px; font-weight:600; color:#1B4F8C; background:#EDF1F7; border:1px solid #C9D6E8; border-radius:12px; padding:4px 10px;">🗓️ ${p.label}</button>`
+    ).join("");
+    const status = document.createElement("span");
+    status.style.cssText =
+      "all:initial; display:block; font-family:'Segoe UI',Arial,sans-serif; font-size:10.5px; color:#5B6472; margin-top:4px; max-width:320px;";
+    container.appendChild(wrap);
+    container.appendChild(document.createElement("br"));
+    container.appendChild(status);
+    sendBtn.insertAdjacentElement("beforebegin", container);
+    sendBtn.dataset.iaScheduleInjected = "1";
+    wrap.querySelectorAll("button[data-preset]").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const targetDate = computePresetDate(btn.dataset.preset);
+        status.textContent = "Working…";
+        await attemptNativeScheduleSend(sendBtn, targetDate, status);
+      });
+    });
+  }
+
+  function scanForComposeSurfaces() {
+    qAllVisible(CONFIG.sendButtonSelectors).forEach(injectScheduleToolbar);
+  }
+  new MutationObserver(scanForComposeSurfaces).observe(document.body, { childList: true, subtree: true });
+  scanForComposeSurfaces();
+
+  // Manual fallback from the panel tab, for whenever Outlook re-renders the
+  // compose toolbar and our injected pills haven't reappeared yet.
+  shadow.querySelectorAll("#tab-schedule [data-preset]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const statusEl = $("#ia-schedule-status");
+      const sendBtn = findComposeSendButton();
+      if (!sendBtn) {
+        statusEl.textContent = "Open a compose or reply window first.";
+        return;
+      }
+      const targetDate = computePresetDate(btn.dataset.preset);
+      statusEl.textContent = "Working…";
+      await attemptNativeScheduleSend(sendBtn, targetDate, statusEl);
+    });
   });
 })();
