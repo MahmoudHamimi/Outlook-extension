@@ -4,7 +4,7 @@ A browser extension (Chrome/Edge, Manifest V3) for **outlook.office.com**,
 **outlook.office365.com**, and **outlook.live.com**. A small floating "IS"
 button appears in the bottom-right corner of the inbox (with a red count
 badge when something needs attention); click it to open the panel with all
-seven tools:
+the tools below:
 
 1. **Stale-email signals (automatic)** — continuously scans the visible message list and stamps a `⏰ Nd` badge directly onto any unread row that's sat unopened longer than the threshold (default 3 days, configurable in the "Stale" tab). Priority senders (see below) get their own, shorter threshold (default 1 day), so an important contact going quiet stands out faster than a newsletter doing the same — their badge is solid instead of outlined to tell them apart at a glance. Any individual flagged email can be **snoozed for a day** from the Stale tab if it's not actionable right now. No click required to flag; opening the email clears its badge right away — see "Recent fixes" below for why this used to lag.
 2. **Priority senders (automatic)** — add a sender's name, email, or an `@domain.com` (to match everyone at a company) in the "Priority" tab, at one of two levels — **Normal** or **High**. Matching rows get a badge and a flat side-accent in the message list; High-priority badges pulse subtly so they stand out from Normal ones. The tab shows how many senders you're tracking and how many are visible in the current list, and a search box filters a long list.
@@ -15,6 +15,11 @@ seven tools:
 7. **Schedule Send quick-picker** — one-click presets (Tomorrow 8am, Monday 9am, Friday EOD) *plus* a custom date/time picker for any minute of any day — both in the panel and as small pills (with an inline "Custom…" mini-picker) injected next to Outlook's own Send button. Times in the past are always blocked. This one is best-effort/experimental — see "Known limitations" below.
 
 8. **Light / dark theme** — a toggle in the panel header (☾ / ☀) switches the whole panel between a light and dark theme; defaults to your OS/browser preference the first time it runs, then remembers your choice.
+9. **Keyword watch (new in 1.5.0)** — add words or phrases in the "Keywords" tab (e.g. `invoice`, `urgent`); any visible message whose subject or preview text contains one gets a `🔑` badge stamped on the row automatically, the same way Stale and Priority badges work.
+10. **Quick reply templates (new in 1.5.0)** — save reusable snippets in the "Compose" tab. Click into a compose field, then hit **Insert** to type the snippet in at your cursor (falls back to copying it to your clipboard if no compose field is focused); **Copy** always just copies.
+11. **Attachment reminder (new in 1.5.0)** — best-effort safety net, on by default (toggle in the "Compose" tab): if your message text mentions "attach…" but no attachment can be found on the compose surface when you hit Send, a single confirmation prompt gives you a chance to double back before it actually sends. It never blocks a send you confirm.
+12. **Email insights (new in 1.5.0)** — the "Insights" tab shows word count, estimated reading time, and link count for whatever's open in the reading pane, refreshing automatically as you switch emails.
+13. **Contacts CSV export (new in 1.5.0)** — a "Download CSV" button on the Contacts tab exports the received/sent sender counts as a spreadsheet-ready file.
 
 Only 4 files: `manifest.json`, `content.js`, `icon.png`, this README.
 
@@ -43,6 +48,15 @@ No build step, no bundler — it's loaded exactly as-is.
 
 ## Recent changes
 
+- **1.5.0 — five new tools.** Keyword watch (auto-flag rows by subject/preview
+  keyword, same mechanism as Priority senders), quick reply templates
+  (save-and-insert-at-cursor snippets for compose), an attachment reminder
+  (confirms before sending if "attach…" is mentioned but nothing's attached),
+  an Insights tab (word count / reading time / link count for the open
+  email), and CSV export for the Contacts tab. All five follow the existing
+  patterns: local `chrome.storage.local` only, no new permissions, and every
+  automation degrades to a manual fallback (clipboard copy, a plain confirm
+  dialog) rather than failing silently.
 - **Priority levels, domain matching, and search.** Priority senders now have a Normal or High level (High gets a bolder, subtly-pulsing badge); adding `@company.com` matches everyone at that domain instead of one address; and the Priority tab has a search box plus tracked/visible counts. Existing plain-text priority lists from 1.3.0 and earlier are upgraded automatically to Normal level the first time the extension runs — nothing is lost.
 - **Priority-aware stale threshold and snoozing.** Priority senders can be flagged stale on a shorter, separately-configurable threshold (default 1 day) so an important contact going quiet stands out sooner; their badge and list entry are visually distinct from regular stale flags. Any single flagged email can now be snoozed for a day from the Stale tab.
 - **Light / dark theme.** A header toggle switches the whole panel between light and dark; it starts from your OS preference and remembers your choice after that.
@@ -150,4 +164,6 @@ in whatever selector still matches).
 - **Stale-email detection depends on Outlook exposing a parseable received date somewhere in a row** (an accessible label or a native tooltip `title`). If a row has neither, it's silently skipped rather than guessed — you'll see a lower "flagged" count than the true number of stale unread emails in that case.
 - **Unread detection uses OWA's bold-text convention as a fallback signal**, which is reliable in the default theme but could misfire under a heavily customized Outlook theme; the badge is additive/visual only and never changes anything about the email itself.
 - **Schedule Send is best-effort/experimental.** Outlook doesn't expose a stable, documented way for a content script to schedule a send. This feature tries, in order: (1) find the small caret/dropdown next to Send, (2) find a "Send later" menu item and click it, (3) find a calendar day button whose accessible label matches the target date and click it. Each step is wrapped so a miss falls back gracefully — at minimum, the computed date/time is always copied to your clipboard — and **the extension never clicks Outlook's own final Send/Schedule confirmation for you**; you always confirm the exact time in Outlook's own dialog. If Outlook changes this UI, the automation may stop at an earlier step than before — that's expected and handled, not a crash.
-- Storage is local to the browser profile (`chrome.storage.local`) — tracked follow-ups, priority senders, contacts snapshots, and cost history won't sync to another device unless you're signed into Chrome sync with extension data sync enabled.
+- Storage is local to the browser profile (`chrome.storage.local`) — tracked follow-ups, priority senders, keywords, templates, contacts snapshots, and cost history won't sync to another device unless you're signed into Chrome sync with extension data sync enabled.
+- **Attachment reminder can't see real attachments, only guess from the DOM.** It looks for elements OWA typically renders per-attachment near the compose box; if Outlook's markup for attachment chips changes, the reminder may fire even when a file is actually attached (or miss a case where one isn't) — it's a nudge, not a guarantee, and confirming always sends immediately.
+- **Template "Insert" needs a compose field to still be focused/open.** It inserts at the last-focused compose body using the browser's own text-insertion API; if that field has since closed or lost track of your cursor, it falls back to copying the template to your clipboard instead.

@@ -63,7 +63,28 @@
     // an important sender going quiet for 3 days is a bigger deal than a
     // newsletter doing the same.
     staleThresholdDays: 3,
-    priorityStaleThresholdDays: 1
+    priorityStaleThresholdDays: 1,
+    // New in 1.5.0 — keyword watch, quick templates, attachment reminder.
+    keywordStorageKey: "ia_keywords_v1",
+    templatesStorageKey: "ia_templates_v1",
+    attachRemStorageKey: "ia_attach_reminder_enabled_v1",
+    // Compose surface's editable body. Best-effort like everything else in
+    // this file — used by Templates (insert at cursor) and the Attachment
+    // reminder (scanning what was typed for the word "attach…").
+    composeBodySelectors: [
+      'div[aria-label="Message body"]',
+      'div[role="textbox"][contenteditable="true"][aria-label*="body" i]',
+      'div[contenteditable="true"][aria-label*="body" i]'
+    ],
+    // Any element OWA renders per-attachment on a compose surface (a chip,
+    // a "remove attachment" button, etc.) — used only to decide whether the
+    // Attachment reminder should speak up; never depended on for anything
+    // that changes the email itself.
+    composeAttachmentSelectors: [
+      '[aria-label*="Remove attachment" i]',
+      '[data-testid*="attachment" i]',
+      'div[role="button"][aria-label*="attachment" i]'
+    ]
   };
 
   /* ============================== UTIL ============================== */
@@ -247,6 +268,8 @@
   let liveTimerInterval = null;
   let liveStartedAt = null;
   let liveElapsedBeforePause = 0;
+  let keywordCache = []; // [string, ...] lowercase keywords for the Keywords tab
+  let lastComposeField = null; // most recently focused compose contenteditable, for Templates "Insert"
 
   // Injected once into the real page (not the shadow root) so badges we add to
   // Outlook's own list rows render correctly; scoped with an "ia-" prefix to
@@ -264,6 +287,7 @@
       background:#24408E; color:#fff; border:1px solid #24408E;
       animation: ia-badge-pulse 2.4s ease-in-out infinite;
     }
+    .ia-badge-keyword { background:#2C8C7A; color:#fff; border:1px solid #2C8C7A; }
     /* Flat, business-style side accent instead of a glowing/pulsing wash —
        a thin solid rail is enough signal without feeling like a toy. */
     .ia-row-priority-normal { box-shadow: inset 3px 0 0 #6C86C4 !important; }
@@ -453,6 +477,9 @@
         <button data-tab="cost"><span class="nav-icon">💰</span>Cost</button>
         <button data-tab="export"><span class="nav-icon">📤</span>Export</button>
         <button data-tab="schedule"><span class="nav-icon">🗓️</span>Schedule</button>
+        <button data-tab="keywords"><span class="nav-icon">🔑</span>Keywords</button>
+        <button data-tab="compose"><span class="nav-icon">✍️</span>Compose</button>
+        <button data-tab="insights"><span class="nav-icon">📖</span>Insights</button>
       </nav>
       <main>
         <section id="tab-followup" class="active">
@@ -518,6 +545,7 @@
           <p class="muted">Each sender is counted once per unique message and never listed twice — scanning again only adds newly-loaded messages, so scroll to load more, open the folder you want (Inbox or Sent Items), then scan. Nothing leaves your browser.</p>
           <button class="primary" id="ia-contacts-scan">📊 Scan this list</button>
           <button class="secondary" id="ia-contacts-reset">Reset counts</button>
+          <button class="secondary" id="ia-contacts-csv">⬇️ Download CSV</button>
           <p class="muted" id="ia-contacts-status"></p>
           <h2 style="margin-top:14px;">Received from</h2>
           <div id="ia-contacts-received"><p class="empty">No inbox scan yet — open your Inbox and scan.</p></div>
@@ -604,6 +632,51 @@
           </div>
           <button class="primary" id="ia-schedule-custom-go">Schedule this time</button>
           <p class="muted" id="ia-schedule-status"></p>
+        </section>
+
+        <section id="tab-keywords">
+          <h2>Keyword watch</h2>
+          <p class="muted">Add words or short phrases (e.g. <b>invoice</b>, <b>contract</b>, <b>urgent</b>). Any visible message whose subject or preview text contains one gets a <span class="ia-badge ia-badge-keyword" style="display:inline;">🔑 match</span> badge, automatically — no click required.</p>
+          <div class="stat-inline">
+            <div class="chip"><b id="ia-keyword-total">0</b><span>keywords tracked</span></div>
+            <div class="chip"><b id="ia-keyword-visible">0</b><span>matches in view</span></div>
+          </div>
+          <label>Add a keyword or phrase</label>
+          <div class="row-flex">
+            <input type="text" id="ia-keyword-input" placeholder="e.g. invoice" />
+            <button class="primary" id="ia-keyword-add" style="margin-top:0;">Add</button>
+          </div>
+          <ul class="tag-list" id="ia-keyword-list"><li class="empty" style="border:none;">No keywords yet.</li></ul>
+        </section>
+
+        <section id="tab-compose">
+          <h2>Quick reply templates</h2>
+          <p class="muted">Save a snippet once, then click a compose field to place your cursor in it and hit <b>Insert</b> — it's typed in right where your cursor is. If no compose field is focused, <b>Copy</b> puts it on your clipboard instead so you can paste it yourself.</p>
+          <label>Name</label>
+          <input type="text" id="ia-template-name" placeholder="e.g. Meeting follow-up" />
+          <label>Text</label>
+          <input type="text" id="ia-template-text" placeholder="e.g. Thanks for your time today — here's a recap…" />
+          <button class="primary" id="ia-template-add">Save template</button>
+          <h2 style="margin-top:14px;">Saved (<span id="ia-template-count">0</span>)</h2>
+          <div id="ia-template-list"><p class="empty">No templates saved yet.</p></div>
+
+          <h2 style="margin-top:16px;">Attachment reminder</h2>
+          <p class="muted">Before sending, if your message mentions "attach…" (or similar) but no attachment is found on the compose surface, InboxSentry asks you to confirm before it lets the send go through. It only ever asks — it never blocks a send you confirm.</p>
+          <label style="display:flex; align-items:center; gap:7px; cursor:pointer;">
+            <input type="checkbox" id="ia-attach-reminder-toggle" style="width:auto;" checked />
+            <span style="font-weight:600;">Enabled</span>
+          </label>
+        </section>
+
+        <section id="tab-insights">
+          <h2>Open email at a glance</h2>
+          <p class="muted">Quick stats for whatever's open in the reading pane right now — updates automatically as you switch emails.</p>
+          <div class="stat-inline">
+            <div class="chip"><b id="ia-insights-words">—</b><span>words</span></div>
+            <div class="chip"><b id="ia-insights-read">—</b><span>min read</span></div>
+            <div class="chip"><b id="ia-insights-links">—</b><span>link(s)</span></div>
+          </div>
+          <p class="muted" id="ia-insights-summary" style="margin-top:8px;">Open an email in the reading pane to see its stats.</p>
         </section>
       </main>
     </div>
@@ -787,6 +860,9 @@
   async function refreshPriorityCache() {
     priorityCache = migratePriorityList(await storageGet(CONFIG.priorityStorageKey));
   }
+  async function refreshKeywordCache() {
+    keywordCache = ((await storageGet(CONFIG.keywordStorageKey)) || []).map((k) => (k || "").toLowerCase()).filter(Boolean);
+  }
   async function refreshSnoozeCache() {
     const stored = (await storageGet(CONFIG.snoozeStorageKey)) || {};
     const now = Date.now();
@@ -843,6 +919,13 @@
       const label = match.level === "high" ? "🔺 Urgent" : "★ Priority";
       badges.push(`<span class="ia-badge ${badgeClass}" title="Priority sender (${match.level})">${label}</span>`);
       row.classList.add(match.level === "high" ? "ia-row-priority-high" : "ia-row-priority-normal");
+    }
+    if (keywordCache.length) {
+      const haystack = (row.textContent || "").toLowerCase();
+      const hit = keywordCache.find((k) => k && haystack.includes(k));
+      if (hit) {
+        badges.push(`<span class="ia-badge ia-badge-keyword" title="Matched keyword: ${escapeHtml(hit)}">🔑 ${escapeHtml(hit)}</span>`);
+      }
     }
     if (badges.length) {
       const wrap = document.createElement("span");
@@ -914,7 +997,9 @@
     attributes: true,
     attributeFilter: ["aria-label", "class", "title"]
   });
-  loadStaleThreshold().then(() => refreshSnoozeCache().then(() => refreshPriorityCache().then(scanMailList)));
+  loadStaleThreshold().then(() =>
+    refreshSnoozeCache().then(() => refreshPriorityCache().then(() => refreshKeywordCache().then(scanMailList)))
+  );
   // OWA re-renders on its own, but a row's age can cross the threshold with no
   // DOM change at all (time just passes), so also re-check periodically.
   setInterval(scanMailList, 5 * 60 * 1000);
@@ -1040,6 +1125,77 @@
   });
   $("#ia-priority-search").addEventListener("input", () => renderPriorityList());
   renderPriorityList();
+
+  /* =========================================================
+     1c-ii) KEYWORD WATCH — same idea as priority senders, but
+     matching on subject/preview text instead of who sent it.
+     Badges are applied inside applyRowSignals() above, driven by
+     keywordCache, so this section is just the storage + tab UI.
+     ========================================================= */
+  async function getKeywords() {
+    return (await storageGet(CONFIG.keywordStorageKey)) || [];
+  }
+  async function saveKeywords(list) {
+    await storageSet(CONFIG.keywordStorageKey, list);
+    await refreshKeywordCache();
+    scanMailList();
+  }
+  async function countKeywordMatchesInView() {
+    if (!keywordCache.length) return 0;
+    const container = qFirst(CONFIG.mailListContainerSelectors) || document.body;
+    const rows = qAllVisible(CONFIG.mailListItemSelectors, container);
+    return rows.filter((r) => {
+      const haystack = (r.textContent || "").toLowerCase();
+      return keywordCache.some((k) => k && haystack.includes(k));
+    }).length;
+  }
+  async function renderKeywordList() {
+    const list = await getKeywords();
+    const el = $("#ia-keyword-list");
+    const totalEl = $("#ia-keyword-total");
+    const visibleEl = $("#ia-keyword-visible");
+    if (totalEl) totalEl.textContent = list.length;
+    if (visibleEl) visibleEl.textContent = await countKeywordMatchesInView();
+    if (list.length === 0) {
+      el.innerHTML = '<li class="empty" style="border:none;">No keywords yet.</li>';
+      return;
+    }
+    el.innerHTML = list
+      .map(
+        (k, i) => `<li data-i="${i}">
+          <span class="tag-left"><span class="name">${escapeHtml(k)}</span></span>
+          <button data-action="remove">Remove</button>
+        </li>`
+      )
+      .join("");
+    el.querySelectorAll("li").forEach((li) => {
+      const i = parseInt(li.dataset.i, 10);
+      const removeBtn = li.querySelector('[data-action="remove"]');
+      if (!removeBtn) return;
+      removeBtn.addEventListener("click", async () => {
+        const cur = await getKeywords();
+        cur.splice(i, 1);
+        await saveKeywords(cur);
+        renderKeywordList();
+      });
+    });
+  }
+  $("#ia-keyword-add").addEventListener("click", async () => {
+    const input = $("#ia-keyword-input");
+    const v = (input.value || "").trim();
+    if (!v) return;
+    const cur = await getKeywords();
+    if (!cur.some((k) => k.toLowerCase() === v.toLowerCase())) {
+      cur.push(v);
+      await saveKeywords(cur);
+    }
+    input.value = "";
+    renderKeywordList();
+  });
+  $("#ia-keyword-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") $("#ia-keyword-add").click();
+  });
+  renderKeywordList();
 
   /* =========================================================
      1d) CONTACTS INSIGHTS — who you receive from / send to most.
@@ -1216,6 +1372,26 @@
     await storageSet(CONFIG.contactsSentStorageKey, null);
     $("#ia-contacts-status").textContent = "Counts reset.";
     refreshContactsTabs();
+  });
+
+  $("#ia-contacts-csv").addEventListener("click", async () => {
+    const received = (await storageGet(CONFIG.contactsReceivedStorageKey)) || { counts: {} };
+    const sent = (await storageGet(CONFIG.contactsSentStorageKey)) || { counts: {} };
+    const rows = [["direction", "contact", "messages"]];
+    Object.entries(received.counts || {})
+      .sort((a, b) => b[1] - a[1])
+      .forEach(([name, count]) => rows.push(["received", name, count]));
+    Object.entries(sent.counts || {})
+      .sort((a, b) => b[1] - a[1])
+      .forEach(([name, count]) => rows.push(["sent", name, count]));
+    if (rows.length === 1) {
+      $("#ia-contacts-status").textContent = "Nothing to export yet — scan Inbox or Sent Items first.";
+      return;
+    }
+    const csvEscape = (v) => `"${String(v).replace(/"/g, '""')}"`;
+    const csv = rows.map((r) => r.map(csvEscape).join(",")).join("\r\n");
+    downloadBlob(`inboxsentry-contacts-${new Date().toISOString().slice(0, 10)}.csv`, csv, "text/csv");
+    $("#ia-contacts-status").textContent = "Downloaded contacts as CSV.";
   });
 
   refreshContactsTabs();
@@ -1723,4 +1899,194 @@
     statusEl.textContent = "Working…";
     await attemptNativeScheduleSend(sendBtn, combined, statusEl);
   });
+
+  /* =========================================================
+     5) QUICK REPLY TEMPLATES
+     Saved snippets you can drop into whatever compose field last
+     had focus. Uses document.execCommand("insertText"), the same
+     approach browsers' own spellcheck-replace UI relies on, so it
+     plays nicely with the compose box's own undo history — if it's
+     ever unavailable (or nothing is focused), this falls back to
+     copying the text to the clipboard instead, same "always leave
+     the person with something usable" pattern as Schedule Send.
+     ========================================================= */
+  document.addEventListener(
+    "focusin",
+    (e) => {
+      const field = e.target.closest ? e.target.closest(CONFIG.composeBodySelectors.join(",")) : null;
+      if (field) lastComposeField = field;
+    },
+    true
+  );
+
+  async function getTemplates() {
+    return (await storageGet(CONFIG.templatesStorageKey)) || [];
+  }
+  async function saveTemplates(list) {
+    await storageSet(CONFIG.templatesStorageKey, list);
+  }
+  function insertIntoComposeField(field, text) {
+    field.focus();
+    try {
+      const ok = document.execCommand("insertText", false, text);
+      if (ok) return true;
+    } catch (e) {
+      /* fall through to clipboard */
+    }
+    return false;
+  }
+  async function renderTemplateList() {
+    const list = await getTemplates();
+    $("#ia-template-count").textContent = list.length;
+    const el = $("#ia-template-list");
+    if (list.length === 0) {
+      el.innerHTML = '<p class="empty">No templates saved yet.</p>';
+      return;
+    }
+    el.innerHTML = list
+      .map(
+        (t, i) => `<div class="item" data-i="${i}">
+          <strong style="font-size:11.5px;">${escapeHtml(t.name)}</strong>
+          <div class="muted" style="margin:3px 0 5px; white-space:pre-wrap;">${escapeHtml(t.text).slice(0, 140)}${t.text.length > 140 ? "…" : ""}</div>
+          <button class="secondary" data-action="insert">Insert</button>
+          <button class="secondary" data-action="copy">Copy</button>
+          <button class="secondary danger" data-action="delete">Delete</button>
+        </div>`
+      )
+      .join("");
+    el.querySelectorAll(".item").forEach((item) => {
+      const i = parseInt(item.dataset.i, 10);
+      item.querySelector('[data-action="insert"]').addEventListener("click", async () => {
+        const cur = await getTemplates();
+        const t = cur[i];
+        if (!t) return;
+        const field = lastComposeField && document.contains(lastComposeField) ? lastComposeField : qFirst(CONFIG.composeBodySelectors);
+        if (field && insertIntoComposeField(field, t.text)) return;
+        const copied = await copyToClipboard(t.text);
+        alert(copied ? "Couldn't find an open compose field — copied to your clipboard instead." : "Couldn't insert or copy — select the template text manually.");
+      });
+      item.querySelector('[data-action="copy"]').addEventListener("click", async () => {
+        const cur = await getTemplates();
+        const t = cur[i];
+        if (!t) return;
+        await copyToClipboard(t.text);
+      });
+      item.querySelector('[data-action="delete"]').addEventListener("click", async () => {
+        const cur = await getTemplates();
+        cur.splice(i, 1);
+        await saveTemplates(cur);
+        renderTemplateList();
+      });
+    });
+  }
+  $("#ia-template-add").addEventListener("click", async () => {
+    const nameEl = $("#ia-template-name");
+    const textEl = $("#ia-template-text");
+    const name = (nameEl.value || "").trim();
+    const text = (textEl.value || "").trim();
+    if (!name || !text) return;
+    const cur = await getTemplates();
+    cur.push({ name, text });
+    await saveTemplates(cur);
+    nameEl.value = "";
+    textEl.value = "";
+    renderTemplateList();
+  });
+  renderTemplateList();
+
+  /* =========================================================
+     6) ATTACHMENT REMINDER
+     Best-effort safety net, same spirit as Schedule Send: this
+     NEVER blocks a send outright. If the open compose surface's
+     text mentions "attach…" (or similar) but no attachment element
+     can be found near it, a single confirm() gives the person a
+     chance to double back — confirming sends immediately with no
+     further interception.
+     ========================================================= */
+  const ATTACH_MENTION_RE = /\b(attach(ed|ment|ments)?|enclos(ed|ure))\b/i;
+  let attachReminderEnabled = true;
+  async function loadAttachReminderSetting() {
+    const stored = await storageGet(CONFIG.attachRemStorageKey);
+    attachReminderEnabled = stored !== false; // default on
+    $("#ia-attach-reminder-toggle").checked = attachReminderEnabled;
+  }
+  $("#ia-attach-reminder-toggle").addEventListener("change", async (e) => {
+    attachReminderEnabled = !!e.target.checked;
+    await storageSet(CONFIG.attachRemStorageKey, attachReminderEnabled);
+  });
+  loadAttachReminderSetting();
+
+  function composeSurfaceFor(sendBtn) {
+    return (
+      sendBtn.closest('[role="dialog"]') ||
+      sendBtn.closest("form") ||
+      sendBtn.closest('[aria-label*="compose" i]') ||
+      document
+    );
+  }
+  const attachBypass = new WeakSet();
+  document.addEventListener(
+    "click",
+    (e) => {
+      if (!attachReminderEnabled) return;
+      const btn = e.target.closest ? e.target.closest(CONFIG.sendButtonSelectors.join(",")) : null;
+      if (!btn) return;
+      if (attachBypass.has(btn)) {
+        attachBypass.delete(btn);
+        return; // this click is our own re-dispatch after the person confirmed
+      }
+      const surface = composeSurfaceFor(btn);
+      const bodyField = qFirst(CONFIG.composeBodySelectors, surface) || qFirst(CONFIG.composeBodySelectors);
+      const text = bodyField ? bodyField.innerText || "" : "";
+      if (!ATTACH_MENTION_RE.test(text)) return;
+      const hasAttachment = qAllVisible(CONFIG.composeAttachmentSelectors, surface).length > 0;
+      if (hasAttachment) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const proceed = confirm(
+        'Your message mentions "attach…" but InboxSentry couldn\'t find an attachment on this email. Send anyway?'
+      );
+      if (proceed) {
+        attachBypass.add(btn);
+        btn.click();
+      }
+    },
+    true
+  );
+
+  /* =========================================================
+     7) EMAIL INSIGHTS — word count, reading time, and link count
+     for whatever's open in the reading pane right now.
+     ========================================================= */
+  function renderInsights() {
+    const bodyEl = qFirst(CONFIG.readingBodySelectors);
+    const wordsEl = $("#ia-insights-words");
+    const readEl = $("#ia-insights-read");
+    const linksEl = $("#ia-insights-links");
+    const summaryEl = $("#ia-insights-summary");
+    if (!wordsEl) return;
+    if (!bodyEl) {
+      wordsEl.textContent = "—";
+      readEl.textContent = "—";
+      linksEl.textContent = "—";
+      summaryEl.textContent = "Open an email in the reading pane to see its stats.";
+      return;
+    }
+    const text = bodyEl.innerText || "";
+    const words = (text.match(/\S+/g) || []).length;
+    const minutes = Math.max(1, Math.round(words / 200));
+    const links = bodyEl.querySelectorAll("a[href]").length;
+    wordsEl.textContent = words;
+    readEl.textContent = minutes;
+    linksEl.textContent = links;
+    const info = currentEmailInfo();
+    summaryEl.textContent = info
+      ? `"${info.subject}" from ${info.sender}`
+      : "Stats reflect the currently open email.";
+  }
+  shadow.querySelectorAll("#ia-tabs button").forEach((btn) => {
+    if (btn.dataset.tab === "insights") btn.addEventListener("click", renderInsights);
+  });
+  setInterval(renderInsights, 4000);
+  renderInsights();
 })();
