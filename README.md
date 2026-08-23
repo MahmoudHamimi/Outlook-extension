@@ -48,6 +48,18 @@ No build step, no bundler — it's loaded exactly as-is.
 
 ## Recent changes
 
+- **1.6.0 — panel polish, no new tabs.** Larger panel-wide type (base text,
+  labels, buttons, and item titles all sized up ~1–1.5px) since the panel
+  was reading a bit small; panel and icon rail widened slightly to match so
+  nothing wraps awkwardly. Added, without adding any new tab or screen:
+  small count pills on the Follow-ups/Stale/Priority/Keywords tab icons
+  (only shown when > 0, so idle tabs stay clean); a compact "at a glance"
+  status strip under the header that lists the same counts in one row and
+  is entirely hidden when everything's at zero — click a stat to jump to
+  that tab; badge tooltips on the message-list badges are now fuller
+  legend-style text (what the badge means, not just its value); and row
+  badges now fade/rise in instead of popping in abruptly, which is more
+  noticeable given how often the stale/priority scan re-stamps rows.
 - **1.5.0 — five new tools.** Keyword watch (auto-flag rows by subject/preview
   keyword, same mechanism as Priority senders), quick reply templates
   (save-and-insert-at-cursor snippets for compose), an attachment reminder

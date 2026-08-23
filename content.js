@@ -277,15 +277,15 @@
   const globalStyle = document.createElement("style");
   globalStyle.textContent = `
     .ia-row-badges { display:inline-flex; gap:4px; margin-left:8px; vertical-align:middle; }
-    .ia-badge { display:inline-block; font-family:"Segoe UI",Arial,sans-serif; font-size:10px;
-      font-weight:600; padding:1px 7px; border-radius:4px; line-height:16px; white-space:nowrap;
-      letter-spacing:.1px; }
+    .ia-badge { display:inline-block; font-family:"Segoe UI",Arial,sans-serif; font-size:11px;
+      font-weight:600; padding:1px 7px; border-radius:4px; line-height:17px; white-space:nowrap;
+      letter-spacing:.1px; animation: ia-badge-in .16s ease; }
     .ia-badge-stale { background:#FDECEA; color:#A32C1E; border:1px solid #F3C6BE; }
     .ia-badge-stale-priority { background:#A32C1E; color:#fff; border:1px solid #A32C1E; }
     .ia-badge-priority-normal { background:#EEF2FB; color:#24408E; border:1px solid #C8D3EE; }
     .ia-badge-priority-high {
       background:#24408E; color:#fff; border:1px solid #24408E;
-      animation: ia-badge-pulse 2.4s ease-in-out infinite;
+      animation: ia-badge-in .16s ease, ia-badge-pulse 2.4s ease-in-out .16s infinite;
     }
     .ia-badge-keyword { background:#2C8C7A; color:#fff; border:1px solid #2C8C7A; }
     /* Flat, business-style side accent instead of a glowing/pulsing wash —
@@ -295,6 +295,12 @@
     @keyframes ia-badge-pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: .72; }
+    }
+    /* Subtle fade+rise instead of an abrupt pop-in, since badges get
+       (re)stamped often as the MutationObserver rescans the list. */
+    @keyframes ia-badge-in {
+      from { opacity: 0; transform: translateY(2px); }
+      to { opacity: 1; transform: translateY(0); }
     }
   `;
   document.documentElement.appendChild(globalStyle);
@@ -362,21 +368,21 @@
         width: 52px; height: 52px; border-radius: 14px;
         background: linear-gradient(155deg, var(--ia-primary-light), var(--ia-primary) 60%, var(--ia-primary-dark));
         color: var(--ia-primary-contrast);
-        border:none; cursor:pointer; box-shadow: var(--ia-shadow); font-size:12px;
+        border:none; cursor:pointer; box-shadow: var(--ia-shadow); font-size:13.5px;
         font-weight:700; position:relative; display:flex; align-items:center; justify-content:center;
         transition: transform .15s ease, box-shadow .15s ease; letter-spacing:.4px;
       }
       .toggle:hover { transform: translateY(-1px) scale(1.03); }
-      .toggle span:first-child { font-family: Georgia, "Times New Roman", serif; font-size:15px; font-weight:700; }
+      .toggle span:first-child { font-family: Georgia, "Times New Roman", serif; font-size:16.5px; font-weight:700; }
       .toggle-badge {
         position:absolute; top:-5px; right:-5px; background: var(--ia-danger-text); color:#fff; border-radius:9px;
         min-width:18px; height:18px; display:none; align-items:center; justify-content:center;
-        font-size:9.5px; font-weight:700; padding:0 4px; box-shadow:0 0 0 2.5px var(--ia-bg);
+        font-size:11px; font-weight:700; padding:0 4px; box-shadow:0 0 0 2.5px var(--ia-bg);
       }
 
       /* ---- Panel shell ---- */
       .panel {
-        display:none; position:fixed; bottom:82px; right:20px; width:452px; max-height:82vh;
+        display:none; position:fixed; bottom:82px; right:20px; width:472px; max-height:82vh;
         background: var(--ia-bg); border-radius:12px; box-shadow: var(--ia-shadow);
         overflow:hidden; flex-direction:column; border:1px solid var(--ia-border); color: var(--ia-text);
       }
@@ -395,42 +401,67 @@
       .brand-mark {
         width:30px; height:30px; border-radius:8px; flex-shrink:0; display:flex; align-items:center; justify-content:center;
         background: rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.28);
-        font-family: Georgia, "Times New Roman", serif; font-weight:700; font-size:13px; letter-spacing:.2px;
+        font-family: Georgia, "Times New Roman", serif; font-weight:700; font-size:14.5px; letter-spacing:.2px;
       }
-      header h1 { margin:0; font-size:14.5px; font-weight:700; letter-spacing:.15px; }
-      header p { margin:1px 0 0; font-size:9.5px; opacity:.82; text-transform:uppercase; letter-spacing:.5px; }
+      header h1 { margin:0; font-size:16px; font-weight:700; letter-spacing:.15px; }
+      header p { margin:1px 0 0; font-size:11px; opacity:.82; text-transform:uppercase; letter-spacing:.5px; }
       .theme-toggle {
         all:initial; cursor:pointer; font-family:inherit; width:27px; height:27px; border-radius:7px;
-        display:flex; align-items:center; justify-content:center; font-size:13px;
+        display:flex; align-items:center; justify-content:center; font-size:14.5px;
         background: rgba(255,255,255,.14); color: var(--ia-primary-contrast); flex-shrink:0;
         transition: background .15s ease; border:1px solid rgba(255,255,255,.22);
       }
       .theme-toggle:hover { background: rgba(255,255,255,.26); }
 
+      /* ---- Status strip: compact "at a glance" counts under the header.
+         Empty/hidden by default — only appears once there's something to
+         show, so a clean inbox doesn't get extra chrome for nothing. ---- */
+      .status-strip {
+        display:none; align-items:center; gap:12px; padding:7px 16px; flex-shrink:0;
+        background: var(--ia-surface); border-bottom:1px solid var(--ia-border);
+        font-size:12.5px; font-weight:600; color: var(--ia-muted); letter-spacing:.1px;
+      }
+      .status-strip.show { display:flex; }
+      .status-strip .stat { display:flex; align-items:center; gap:4px; cursor:pointer; }
+      .status-strip .stat b { color: var(--ia-heading); font-weight:800; }
+      .status-strip .stat:hover { color: var(--ia-primary); }
+      .status-strip .stat:hover b { color: var(--ia-primary); }
+
       /* ---- Body: icon rail + content ---- */
       .panel-body { display:flex; flex:1; min-height:0; }
       nav {
-        display:flex; flex-direction:column; align-items:stretch; flex-shrink:0; width:70px;
+        display:flex; flex-direction:column; align-items:stretch; flex-shrink:0; width:74px;
         background: var(--ia-surface); border-right:1px solid var(--ia-border);
         overflow-y:auto; padding:6px 0;
       }
       nav button {
-        border:none; background:none; padding:8px 2px; font-size:9px; cursor:pointer;
+        border:none; background:none; padding:8px 2px; font-size:11.5px; cursor:pointer;
         color: var(--ia-muted); white-space:nowrap; position:relative;
         display:flex; flex-direction:column; align-items:center; gap:3px; font-family:inherit; font-weight:600;
         transition: color .12s ease, background .12s ease; border-left:2.5px solid transparent;
       }
       nav button .nav-icon {
-        font-size:15px; line-height:1; width:28px; height:28px; border-radius:7px;
+        font-size:17.5px; line-height:1; width:28px; height:28px; border-radius:7px;
         display:flex; align-items:center; justify-content:center; transition: background .12s ease;
+        position:relative;
       }
       nav button:hover { color: var(--ia-primary); background: var(--ia-surface-2); }
       nav button.active {
         color: var(--ia-primary); font-weight:700; background: var(--ia-bg); border-left-color: var(--ia-primary);
       }
       nav button.active .nav-icon { background: var(--ia-primary-tint); }
+      /* Small count pill on a tab's icon — only shown when a count is set
+         (see JS), so idle tabs stay clean and only the ones needing
+         attention stand out. */
+      .nav-count {
+        position:absolute; top:-4px; right:-6px; min-width:15px; height:15px; padding:0 3px;
+        border-radius:8px; background: var(--ia-danger-text); color:#fff; font-size:10.5px; font-weight:700;
+        display:none; align-items:center; justify-content:center; line-height:1; box-shadow:0 0 0 2px var(--ia-surface);
+      }
+      nav button.active .nav-count { box-shadow:0 0 0 2px var(--ia-bg); }
+      .nav-count.show { display:flex; }
       main {
-        flex:1; min-width:0; padding:14px 16px 16px; overflow-y:auto; font-size:12.5px;
+        flex:1; min-width:0; padding:14px 16px 16px; overflow-y:auto; font-size:14px;
         color: var(--ia-text); background: var(--ia-bg);
       }
       main::-webkit-scrollbar, nav::-webkit-scrollbar, ul.contact-full-list-items::-webkit-scrollbar { width:8px; }
@@ -443,13 +474,13 @@
       @keyframes ia-fade-in { from { opacity:.4; } to { opacity:1; } }
 
       h2 {
-        font-size:11px; margin:0 0 7px; padding-bottom:6px; font-weight:700; color: var(--ia-heading);
+        font-size:12.5px; margin:0 0 7px; padding-bottom:6px; font-weight:700; color: var(--ia-heading);
         text-transform:uppercase; letter-spacing:.5px; border-bottom:1px solid var(--ia-border);
       }
-      .muted { color: var(--ia-muted); font-size:11px; line-height:1.55; }
-      label { display:block; font-size:10.5px; font-weight:700; margin:9px 0 3px; color: var(--ia-heading); text-transform:uppercase; letter-spacing:.3px; }
+      .muted { color: var(--ia-muted); font-size:12.5px; line-height:1.55; }
+      label { display:block; font-size:12px; font-weight:700; margin:9px 0 3px; color: var(--ia-heading); text-transform:uppercase; letter-spacing:.3px; }
       input, select {
-        width:100%; padding:6px 8px; border:1px solid var(--ia-border); border-radius:6px; font-size:12px;
+        width:100%; padding:6px 8px; border:1px solid var(--ia-border); border-radius:6px; font-size:13.5px;
         background: var(--ia-bg); color: var(--ia-text); font-family:inherit; transition: border-color .12s ease, box-shadow .12s ease;
       }
       input:focus, select:focus { outline:none; border-color: var(--ia-primary); box-shadow: var(--ia-focus-ring); }
@@ -458,7 +489,7 @@
       button.primary {
         background: linear-gradient(135deg, var(--ia-primary-light), var(--ia-primary)); color: var(--ia-primary-contrast);
         border:none; border-radius:7px;
-        padding:8px 14px; font-size:11.5px; font-weight:700; cursor:pointer; margin-top:8px;
+        padding:8px 14px; font-size:13px; font-weight:700; cursor:pointer; margin-top:8px;
         box-shadow: var(--ia-shadow-sm); transition: filter .12s ease, transform .08s ease; font-family:inherit;
         letter-spacing:.1px;
       }
@@ -466,7 +497,7 @@
       button.primary:active { transform: translateY(1px); }
       button.secondary {
         background: var(--ia-bg); color: var(--ia-primary); border:1px solid var(--ia-border-strong); border-radius:7px; padding:6px 11px;
-        font-size:10.5px; cursor:pointer; margin-right:6px; margin-top:6px; font-weight:700; font-family:inherit;
+        font-size:12px; cursor:pointer; margin-right:6px; margin-top:6px; font-weight:700; font-family:inherit;
         transition: background .12s ease, border-color .12s ease;
       }
       button.secondary:hover { background: var(--ia-surface-2); border-color: var(--ia-primary); }
@@ -477,13 +508,13 @@
         border:1px solid var(--ia-border); border-radius:8px; padding:9px 10px; margin-bottom:8px;
         background: var(--ia-surface); box-shadow: var(--ia-shadow-sm);
       }
-      .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:9.5px; font-weight:700; letter-spacing:.2px; }
+      .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:700; letter-spacing:.2px; }
       .pill.warn { background: var(--ia-warn-bg); color: var(--ia-warn-text); }
       .pill.ok { background: var(--ia-success-bg); color: var(--ia-success-text); }
       .pill.due { background: var(--ia-danger-bg); color: var(--ia-danger-text); }
       .pill.high { background: var(--ia-primary); color: var(--ia-primary-contrast); }
       .pill.normal { background: var(--ia-primary-tint); color: var(--ia-primary); }
-      .empty { color: var(--ia-muted); font-style:italic; font-size:11px; padding:10px 0; }
+      .empty { color: var(--ia-muted); font-style:italic; font-size:12.5px; padding:10px 0; }
       .warning-list { margin:0; padding-left:16px; }
       .warning-list li { margin-bottom:5px; }
       .row-flex { display:flex; gap:7px; align-items:flex-end; }
@@ -491,14 +522,14 @@
       .tag-list { list-style:none; margin:8px 0 0; padding:0; }
       .tag-list li {
         display:flex; justify-content:space-between; align-items:center; gap:6px;
-        border:1px solid var(--ia-border); border-radius:7px; padding:6px 9px; margin-bottom:6px; font-size:11.5px;
+        border:1px solid var(--ia-border); border-radius:7px; padding:6px 9px; margin-bottom:6px; font-size:13px;
         background: var(--ia-surface); transition: border-color .12s ease;
       }
       .tag-list li:hover { border-color: var(--ia-border-strong); }
       .tag-list li .tag-left { display:flex; align-items:center; gap:6px; overflow:hidden; }
       .tag-list li .tag-left span.name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .tag-list button {
-        background:none; border:none; color: var(--ia-danger-text); cursor:pointer; font-size:10.5px;
+        background:none; border:none; color: var(--ia-danger-text); cursor:pointer; font-size:12px;
         font-weight:700; font-family:inherit; flex-shrink:0; padding:3px 6px; border-radius:5px;
         transition: background .12s ease;
       }
@@ -507,14 +538,14 @@
         background: var(--ia-surface); border:1px solid var(--ia-border); border-radius:9px;
         padding:14px 16px; margin-top:8px; text-align:center; box-shadow: var(--ia-shadow-sm);
       }
-      .stat-big { font-size:25px; font-weight:800; color: var(--ia-primary); letter-spacing:-.2px; }
+      .stat-big { font-size:26px; font-weight:800; color: var(--ia-primary); letter-spacing:-.2px; }
       .donut-row { display:flex; gap:16px; align-items:center; }
-      .donut-legend { list-style:none; margin:0; padding:0; font-size:11px; flex:1; }
+      .donut-legend { list-style:none; margin:0; padding:0; font-size:12.5px; flex:1; }
       .donut-legend li { display:flex; align-items:center; gap:6px; margin-bottom:5px; color: var(--ia-text); }
       .dot { width:9px; height:9px; border-radius:2px; display:inline-block; flex-shrink:0; }
       details.contact-full-list { margin-top:10px; border:1px solid var(--ia-border); border-radius:8px; overflow:hidden; }
       details.contact-full-list summary {
-        cursor:pointer; padding:8px 10px; font-size:10.5px; font-weight:700; color: var(--ia-primary); list-style:none;
+        cursor:pointer; padding:8px 10px; font-size:12px; font-weight:700; color: var(--ia-primary); list-style:none;
         text-transform:uppercase; letter-spacing:.3px; background: var(--ia-surface);
       }
       details.contact-full-list summary::-webkit-details-marker { display:none; }
@@ -522,17 +553,17 @@
         list-style:none; margin:0; padding:2px 10px 10px; max-height:180px; overflow-y:auto;
       }
       ul.contact-full-list-items li {
-        display:flex; justify-content:space-between; font-size:11px; padding:5px 0; border-top:1px solid var(--ia-border); color: var(--ia-text);
+        display:flex; justify-content:space-between; font-size:12.5px; padding:5px 0; border-top:1px solid var(--ia-border); color: var(--ia-text);
       }
       ul.contact-full-list-items li:first-child { border-top:none; }
-      .field-hint { font-size:10px; color: var(--ia-muted); margin-top:4px; line-height:1.45; }
+      .field-hint { font-size:11.5px; color: var(--ia-muted); margin-top:4px; line-height:1.45; }
       .stat-inline { display:flex; gap:8px; margin:8px 0 2px; }
       .stat-inline .chip {
         flex:1; text-align:center; background: var(--ia-surface); border:1px solid var(--ia-border);
         border-radius:8px; padding:8px 4px;
       }
-      .stat-inline .chip b { display:block; font-size:16px; color: var(--ia-primary); font-weight:800; }
-      .stat-inline .chip span { font-size:9px; color: var(--ia-muted); text-transform:uppercase; letter-spacing:.3px; }
+      .stat-inline .chip b { display:block; font-size:17.5px; color: var(--ia-primary); font-weight:800; }
+      .stat-inline .chip span { font-size:10.5px; color: var(--ia-muted); text-transform:uppercase; letter-spacing:.3px; }
     </style>
     <button class="toggle" id="ia-toggle" title="InboxSentry">
       <span>IS</span>
@@ -546,16 +577,17 @@
         </div>
         <button class="theme-toggle" id="ia-theme-toggle" title="Toggle light / dark theme">◐</button>
       </header>
+      <div class="status-strip" id="ia-status-strip"></div>
       <div class="panel-body">
       <nav id="ia-tabs">
-        <button data-tab="followup" class="active"><span class="nav-icon">📌</span>Follow-ups</button>
-        <button data-tab="stale"><span class="nav-icon">⏰</span>Stale</button>
-        <button data-tab="priority"><span class="nav-icon">★</span>Priority</button>
+        <button data-tab="followup" class="active"><span class="nav-icon">📌<span class="nav-count" id="ia-navcount-followup">0</span></span>Follow-ups</button>
+        <button data-tab="stale"><span class="nav-icon">⏰<span class="nav-count" id="ia-navcount-stale">0</span></span>Stale</button>
+        <button data-tab="priority"><span class="nav-icon">★<span class="nav-count" id="ia-navcount-priority">0</span></span>Priority</button>
         <button data-tab="contacts"><span class="nav-icon">📊</span>Contacts</button>
         <button data-tab="cost"><span class="nav-icon">💰</span>Cost</button>
         <button data-tab="export"><span class="nav-icon">📤</span>Export</button>
         <button data-tab="schedule"><span class="nav-icon">🗓️</span>Schedule</button>
-        <button data-tab="keywords"><span class="nav-icon">🔑</span>Keywords</button>
+        <button data-tab="keywords"><span class="nav-icon">🔑<span class="nav-count" id="ia-navcount-keywords">0</span></span>Keywords</button>
         <button data-tab="compose"><span class="nav-icon">✍️</span>Compose</button>
         <button data-tab="insights"><span class="nav-icon">📖</span>Insights</button>
       </nav>
@@ -803,14 +835,63 @@
     const overdue = followUps.filter(
       (f) => Math.floor((Date.now() - new Date(f.trackedAt).getTime()) / 86400000) >= f.days
     ).length;
-    const total = overdue + lastStaleItems.length;
+    const staleCount = lastStaleItems.length;
+    const total = overdue + staleCount;
     const badge = $("#ia-toggle-badge");
-    if (!badge) return;
-    if (total > 0) {
-      badge.style.display = "flex";
-      badge.textContent = total > 99 ? "99+" : String(total);
+    if (badge) {
+      if (total > 0) {
+        badge.style.display = "flex";
+        badge.textContent = total > 99 ? "99+" : String(total);
+      } else {
+        badge.style.display = "none";
+      }
+    }
+
+    // Per-tab count pills — same numbers, just broken out by tab so you can
+    // see what needs attention without opening each one. Only shown when
+    // > 0 so idle tabs stay visually quiet.
+    const keywordVisible = await countKeywordMatchesInView();
+    const priorityVisible = await countPriorityInView();
+    setNavCount("followup", overdue);
+    setNavCount("stale", staleCount);
+    setNavCount("priority", priorityVisible);
+    setNavCount("keywords", keywordVisible);
+
+    // Header status strip mirrors the same numbers in one compact row;
+    // collapses entirely when everything is zero.
+    const strip = $("#ia-status-strip");
+    if (strip) {
+      const stats = [
+        overdue > 0 ? { tab: "followup", icon: "📌", n: overdue, label: overdue === 1 ? "follow-up due" : "follow-ups due" } : null,
+        staleCount > 0 ? { tab: "stale", icon: "⏰", n: staleCount, label: staleCount === 1 ? "stale email" : "stale emails" } : null,
+        priorityVisible > 0 ? { tab: "priority", icon: "★", n: priorityVisible, label: priorityVisible === 1 ? "priority sender" : "priority senders" } : null,
+        keywordVisible > 0 ? { tab: "keywords", icon: "🔑", n: keywordVisible, label: keywordVisible === 1 ? "keyword match" : "keyword matches" } : null
+      ].filter(Boolean);
+      if (stats.length) {
+        strip.classList.add("show");
+        strip.innerHTML = stats
+          .map((s) => `<span class="stat" data-tab="${s.tab}"><span>${s.icon}</span><b>${s.n}</b>${s.label}</span>`)
+          .join("");
+        strip.querySelectorAll(".stat").forEach((el) => {
+          el.addEventListener("click", () => {
+            const btn = shadow.querySelector(`nav button[data-tab="${el.dataset.tab}"]`);
+            if (btn) btn.click();
+          });
+        });
+      } else {
+        strip.classList.remove("show");
+        strip.innerHTML = "";
+      }
+    }
+  }
+  function setNavCount(tab, n) {
+    const el = $("#ia-navcount-" + tab);
+    if (!el) return;
+    if (n > 0) {
+      el.textContent = n > 99 ? "99+" : String(n);
+      el.classList.add("show");
     } else {
-      badge.style.display = "none";
+      el.classList.remove("show");
     }
   }
 
@@ -879,7 +960,7 @@
         return `
         <div class="item" data-id="${escapeHtml(f.id)}">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <strong style="font-size:11.5px;">${escapeHtml(f.subject).slice(0, 60)}</strong>
+            <strong style="font-size:13px;">${escapeHtml(f.subject).slice(0, 60)}</strong>
           </div>
           <div class="muted">${f.sender ? escapeHtml(f.sender) + " &middot; " : ""}${pill} &middot; tracked ${new Date(f.trackedAt).toLocaleDateString()}</div>
           <button class="secondary" data-action="open">Open</button>
@@ -981,7 +1062,9 @@
       const threshold = match ? Math.min(staleThresholdDays, priorityStaleThresholdDays) : staleThresholdDays;
       if (ageDays >= threshold) {
         const badgeClass = match ? "ia-badge-stale-priority" : "ia-badge-stale";
-        const title = match ? `Priority sender, unopened for ${ageDays} day(s)` : `Unopened for ${ageDays} day(s)`;
+        const title = match
+          ? `⏰ Stale (priority) — unopened for ${ageDays} day(s), past your ${priorityStaleThresholdDays}-day priority threshold`
+          : `⏰ Stale — unopened for ${ageDays} day(s), past your ${staleThresholdDays}-day threshold`;
         badges.push(`<span class="ia-badge ${badgeClass}" title="${title}">⏰ ${ageDays}d</span>`);
         lastStaleItems.push({
           uid,
@@ -996,14 +1079,18 @@
     if (match) {
       const badgeClass = match.level === "high" ? "ia-badge-priority-high" : "ia-badge-priority-normal";
       const label = match.level === "high" ? "🔺 Urgent" : "★ Priority";
-      badges.push(`<span class="ia-badge ${badgeClass}" title="Priority sender (${match.level})">${label}</span>`);
+      const legendTitle =
+        match.level === "high"
+          ? "🔺 High-priority sender — on your Priority list, flagged sooner if it goes stale"
+          : "★ Priority sender — on your Priority list, flagged sooner if it goes stale";
+      badges.push(`<span class="ia-badge ${badgeClass}" title="${legendTitle}">${label}</span>`);
       row.classList.add(match.level === "high" ? "ia-row-priority-high" : "ia-row-priority-normal");
     }
     if (keywordCache.length) {
       const haystack = (row.textContent || "").toLowerCase();
       const hit = keywordCache.find((k) => k && haystack.includes(k));
       if (hit) {
-        badges.push(`<span class="ia-badge ia-badge-keyword" title="Matched keyword: ${escapeHtml(hit)}">🔑 ${escapeHtml(hit)}</span>`);
+        badges.push(`<span class="ia-badge ia-badge-keyword" title="🔑 Keyword watch — subject or preview matched &quot;${escapeHtml(hit)}&quot;">🔑 ${escapeHtml(hit)}</span>`);
       }
     }
     if (badges.length) {
@@ -1045,7 +1132,7 @@
               : `<span class="pill due">${it.ageDays}d unopened</span>`;
             return `
           <div class="item" data-uid="${escapeHtml(it.uid || "")}" data-idx="${i}">
-            <strong style="font-size:11.5px;">${escapeHtml(it.subject).slice(0, 60)}</strong>
+            <strong style="font-size:13px;">${escapeHtml(it.subject).slice(0, 60)}</strong>
             <div class="muted">${escapeHtml(it.sender)} &middot; ${pill}</div>
             ${it.uid ? '<button class="secondary" data-action="snooze">Snooze 1 day</button>' : ""}
           </div>`;
@@ -1204,6 +1291,7 @@
   });
   $("#ia-priority-search").addEventListener("input", () => renderPriorityList());
   renderPriorityList();
+  updateToggleBadge();
 
   /* =========================================================
      1c-ii) KEYWORD WATCH — same idea as priority senders, but
@@ -1275,6 +1363,7 @@
     if (e.key === "Enter") $("#ia-keyword-add").click();
   });
   renderKeywordList();
+  updateToggleBadge();
 
   /* =========================================================
      1d) CONTACTS INSIGHTS — who you receive from / send to most.
@@ -1373,8 +1462,8 @@
     return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
       <g transform="rotate(-90 ${cx} ${cy})">${circles}</g>
       <circle cx="${cx}" cy="${cy}" r="${r - thickness / 2 - 3}" fill="${holeColor}"></circle>
-      <text x="${cx}" y="${cy - 3}" text-anchor="middle" font-size="16" font-weight="800" fill="${textColor}">${total}</text>
-      <text x="${cx}" y="${cy + 13}" text-anchor="middle" font-size="8.5" fill="${subTextColor}">emails</text>
+      <text x="${cx}" y="${cy - 3}" text-anchor="middle" font-size="17.5" font-weight="800" fill="${textColor}">${total}</text>
+      <text x="${cx}" y="${cy + 13}" text-anchor="middle" font-size="9.5" fill="${subTextColor}">emails</text>
     </svg>`;
   }
 
@@ -1505,7 +1594,7 @@
         .slice(0, 8)
         .map(
           (h) => `<div class="item">
-            <strong style="font-size:11.5px;">${h.symbol}${h.cost.toFixed(0)}</strong>
+            <strong style="font-size:13px;">${h.symbol}${h.cost.toFixed(0)}</strong>
             <span class="muted"> &middot; ${h.attendees} attendee(s) &middot; ${h.minutes}min &middot; ${escapeHtml(h.recurrenceLabel)}</span>
             <div class="muted">${new Date(h.ts).toLocaleString()}</div>
           </div>`
@@ -2025,7 +2114,7 @@
     el.innerHTML = list
       .map(
         (t, i) => `<div class="item" data-i="${i}">
-          <strong style="font-size:11.5px;">${escapeHtml(t.name)}</strong>
+          <strong style="font-size:13px;">${escapeHtml(t.name)}</strong>
           <div class="muted" style="margin:3px 0 5px; white-space:pre-wrap;">${escapeHtml(t.text).slice(0, 140)}${t.text.length > 140 ? "…" : ""}</div>
           <button class="secondary" data-action="insert">Insert</button>
           <button class="secondary" data-action="copy">Copy</button>
