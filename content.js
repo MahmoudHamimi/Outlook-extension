@@ -1015,11 +1015,20 @@
   }
 
   function scanMailList() {
-    lastStaleItems = [];
-    const container = qFirst(CONFIG.mailListContainerSelectors) || document.body;
-    const rows = qAllVisible(CONFIG.mailListItemSelectors, container);
-    rows.forEach(applyRowSignals);
-    renderStaleTab();
+    // Pause the observer while we make our own DOM writes below, so
+    // badge/class updates don't get picked up as "Outlook changed
+    // something" and schedule another immediate rescan (see FIX note
+    // on the observer above). It's reconnected right after.
+    mailListObserver.disconnect();
+    try {
+      lastStaleItems = [];
+      const container = qFirst(CONFIG.mailListContainerSelectors) || document.body;
+      const rows = qAllVisible(CONFIG.mailListItemSelectors, container);
+      rows.forEach(applyRowSignals);
+      renderStaleTab();
+    } finally {
+      observeMailList();
+    }
   }
 
   function renderStaleTab() {
@@ -1070,12 +1079,27 @@
   // Watch both node changes AND attribute changes (see FIX note above) so a
   // row that goes from unread -> read without being replaced still triggers
   // a rescan and clears its badge.
-  new MutationObserver(scheduleScan).observe(document.body, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["aria-label", "class", "title"]
-  });
+  //
+  // FIX (flicker): applyRowSignals() itself writes to the DOM it's watching —
+  // it removes/re-adds the ".ia-row-badges" node (a childList change) and
+  // toggles "ia-row-priority-*" classes on the row (an attribute change in
+  // attributeFilter). Those are exactly the mutations this observer listens
+  // for, so every scan re-triggered another scan 500ms later, which redrew
+  // the badge again, which re-triggered the observer again — an infinite
+  // scan/redraw loop with no real change in between, seen as the badge
+  // flickering (removed and recreated) on a ~500ms cadence forever. The fix
+  // is to disconnect the observer for the duration of our own synchronous
+  // DOM writes so only genuine Outlook-driven changes schedule a rescan.
+  const mailListObserver = new MutationObserver(scheduleScan);
+  function observeMailList() {
+    mailListObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["aria-label", "class", "title"]
+    });
+  }
+  observeMailList();
   loadStaleThreshold().then(() =>
     refreshSnoozeCache().then(() => refreshPriorityCache().then(() => refreshKeywordCache().then(scanMailList)))
   );
