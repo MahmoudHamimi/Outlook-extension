@@ -277,7 +277,7 @@
   const globalStyle = document.createElement("style");
   globalStyle.textContent = `
     .ia-row-badges { display:inline-flex; gap:4px; margin-left:8px; vertical-align:middle; }
-    .ia-badge { display:inline-block; font-family:"Segoe UI",Arial,sans-serif; font-size:10px;
+    .ia-badge { display:inline-block; font-family:"Segoe UI",Arial,sans-serif; font-size:11.5px;
       font-weight:600; padding:1px 7px; border-radius:4px; line-height:16px; white-space:nowrap;
       letter-spacing:.1px; }
     .ia-badge-stale { background:#FDECEA; color:#A32C1E; border:1px solid #F3C6BE; }
@@ -362,16 +362,16 @@
         width: 52px; height: 52px; border-radius: 14px;
         background: linear-gradient(155deg, var(--ia-primary-light), var(--ia-primary) 60%, var(--ia-primary-dark));
         color: var(--ia-primary-contrast);
-        border:none; cursor:pointer; box-shadow: var(--ia-shadow); font-size:12px;
+        border:none; cursor:pointer; box-shadow: var(--ia-shadow); font-size:14px;
         font-weight:700; position:relative; display:flex; align-items:center; justify-content:center;
         transition: transform .15s ease, box-shadow .15s ease; letter-spacing:.4px;
       }
       .toggle:hover { transform: translateY(-1px) scale(1.03); }
-      .toggle span:first-child { font-family: Georgia, "Times New Roman", serif; font-size:15px; font-weight:700; }
+      .toggle span:first-child { font-family: Georgia, "Times New Roman", serif; font-size:17px; font-weight:700; }
       .toggle-badge {
         position:absolute; top:-5px; right:-5px; background: var(--ia-danger-text); color:#fff; border-radius:9px;
         min-width:18px; height:18px; display:none; align-items:center; justify-content:center;
-        font-size:9.5px; font-weight:700; padding:0 4px; box-shadow:0 0 0 2.5px var(--ia-bg);
+        font-size:11px; font-weight:700; padding:0 4px; box-shadow:0 0 0 2.5px var(--ia-bg);
       }
 
       /* ---- Panel shell ---- */
@@ -395,13 +395,13 @@
       .brand-mark {
         width:30px; height:30px; border-radius:8px; flex-shrink:0; display:flex; align-items:center; justify-content:center;
         background: rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.28);
-        font-family: Georgia, "Times New Roman", serif; font-weight:700; font-size:13px; letter-spacing:.2px;
+        font-family: Georgia, "Times New Roman", serif; font-weight:700; font-size:15px; letter-spacing:.2px;
       }
-      header h1 { margin:0; font-size:14.5px; font-weight:700; letter-spacing:.15px; }
-      header p { margin:1px 0 0; font-size:9.5px; opacity:.82; text-transform:uppercase; letter-spacing:.5px; }
+      header h1 { margin:0; font-size:16.5px; font-weight:700; letter-spacing:.15px; }
+      header p { margin:1px 0 0; font-size:11px; opacity:.82; text-transform:uppercase; letter-spacing:.5px; }
       .theme-toggle {
         all:initial; cursor:pointer; font-family:inherit; width:27px; height:27px; border-radius:7px;
-        display:flex; align-items:center; justify-content:center; font-size:13px;
+        display:flex; align-items:center; justify-content:center; font-size:15px;
         background: rgba(255,255,255,.14); color: var(--ia-primary-contrast); flex-shrink:0;
         transition: background .15s ease; border:1px solid rgba(255,255,255,.22);
       }
@@ -415,13 +415,13 @@
         overflow-y:auto; padding:6px 0;
       }
       nav button {
-        border:none; background:none; padding:8px 2px; font-size:9px; cursor:pointer;
+        border:none; background:none; padding:8px 2px; font-size:10.5px; cursor:pointer;
         color: var(--ia-muted); white-space:nowrap; position:relative;
         display:flex; flex-direction:column; align-items:center; gap:3px; font-family:inherit; font-weight:600;
         transition: color .12s ease, background .12s ease; border-left:2.5px solid transparent;
       }
       nav button .nav-icon {
-        font-size:15px; line-height:1; width:28px; height:28px; border-radius:7px;
+        font-size:17px; line-height:1; width:28px; height:28px; border-radius:7px;
         display:flex; align-items:center; justify-content:center; transition: background .12s ease;
       }
       nav button:hover { color: var(--ia-primary); background: var(--ia-surface-2); }
@@ -430,7 +430,7 @@
       }
       nav button.active .nav-icon { background: var(--ia-primary-tint); }
       main {
-        flex:1; min-width:0; padding:14px 16px 16px; overflow-y:auto; font-size:12.5px;
+        flex:1; min-width:0; padding:14px 16px 16px; overflow-y:auto; font-size:14.5px;
         color: var(--ia-text); background: var(--ia-bg);
       }
       main::-webkit-scrollbar, nav::-webkit-scrollbar, ul.contact-full-list-items::-webkit-scrollbar { width:8px; }
@@ -443,13 +443,13 @@
       @keyframes ia-fade-in { from { opacity:.4; } to { opacity:1; } }
 
       h2 {
-        font-size:11px; margin:0 0 7px; padding-bottom:6px; font-weight:700; color: var(--ia-heading);
+        font-size:12.5px; margin:0 0 7px; padding-bottom:6px; font-weight:700; color: var(--ia-heading);
         text-transform:uppercase; letter-spacing:.5px; border-bottom:1px solid var(--ia-border);
       }
-      .muted { color: var(--ia-muted); font-size:11px; line-height:1.55; }
-      label { display:block; font-size:10.5px; font-weight:700; margin:9px 0 3px; color: var(--ia-heading); text-transform:uppercase; letter-spacing:.3px; }
+      .muted { color: var(--ia-muted); font-size:12.5px; line-height:1.55; }
+      label { display:block; font-size:12px; font-weight:700; margin:9px 0 3px; color: var(--ia-heading); text-transform:uppercase; letter-spacing:.3px; }
       input, select {
-        width:100%; padding:6px 8px; border:1px solid var(--ia-border); border-radius:6px; font-size:12px;
+        width:100%; padding:6px 8px; border:1px solid var(--ia-border); border-radius:6px; font-size:14px;
         background: var(--ia-bg); color: var(--ia-text); font-family:inherit; transition: border-color .12s ease, box-shadow .12s ease;
       }
       input:focus, select:focus { outline:none; border-color: var(--ia-primary); box-shadow: var(--ia-focus-ring); }
@@ -458,7 +458,7 @@
       button.primary {
         background: linear-gradient(135deg, var(--ia-primary-light), var(--ia-primary)); color: var(--ia-primary-contrast);
         border:none; border-radius:7px;
-        padding:8px 14px; font-size:11.5px; font-weight:700; cursor:pointer; margin-top:8px;
+        padding:8px 14px; font-size:13px; font-weight:700; cursor:pointer; margin-top:8px;
         box-shadow: var(--ia-shadow-sm); transition: filter .12s ease, transform .08s ease; font-family:inherit;
         letter-spacing:.1px;
       }
@@ -466,7 +466,7 @@
       button.primary:active { transform: translateY(1px); }
       button.secondary {
         background: var(--ia-bg); color: var(--ia-primary); border:1px solid var(--ia-border-strong); border-radius:7px; padding:6px 11px;
-        font-size:10.5px; cursor:pointer; margin-right:6px; margin-top:6px; font-weight:700; font-family:inherit;
+        font-size:12px; cursor:pointer; margin-right:6px; margin-top:6px; font-weight:700; font-family:inherit;
         transition: background .12s ease, border-color .12s ease;
       }
       button.secondary:hover { background: var(--ia-surface-2); border-color: var(--ia-primary); }
@@ -477,13 +477,13 @@
         border:1px solid var(--ia-border); border-radius:8px; padding:9px 10px; margin-bottom:8px;
         background: var(--ia-surface); box-shadow: var(--ia-shadow-sm);
       }
-      .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:9.5px; font-weight:700; letter-spacing:.2px; }
+      .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:700; letter-spacing:.2px; }
       .pill.warn { background: var(--ia-warn-bg); color: var(--ia-warn-text); }
       .pill.ok { background: var(--ia-success-bg); color: var(--ia-success-text); }
       .pill.due { background: var(--ia-danger-bg); color: var(--ia-danger-text); }
       .pill.high { background: var(--ia-primary); color: var(--ia-primary-contrast); }
       .pill.normal { background: var(--ia-primary-tint); color: var(--ia-primary); }
-      .empty { color: var(--ia-muted); font-style:italic; font-size:11px; padding:10px 0; }
+      .empty { color: var(--ia-muted); font-style:italic; font-size:12.5px; padding:10px 0; }
       .warning-list { margin:0; padding-left:16px; }
       .warning-list li { margin-bottom:5px; }
       .row-flex { display:flex; gap:7px; align-items:flex-end; }
@@ -491,14 +491,14 @@
       .tag-list { list-style:none; margin:8px 0 0; padding:0; }
       .tag-list li {
         display:flex; justify-content:space-between; align-items:center; gap:6px;
-        border:1px solid var(--ia-border); border-radius:7px; padding:6px 9px; margin-bottom:6px; font-size:11.5px;
+        border:1px solid var(--ia-border); border-radius:7px; padding:6px 9px; margin-bottom:6px; font-size:13px;
         background: var(--ia-surface); transition: border-color .12s ease;
       }
       .tag-list li:hover { border-color: var(--ia-border-strong); }
       .tag-list li .tag-left { display:flex; align-items:center; gap:6px; overflow:hidden; }
       .tag-list li .tag-left span.name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .tag-list button {
-        background:none; border:none; color: var(--ia-danger-text); cursor:pointer; font-size:10.5px;
+        background:none; border:none; color: var(--ia-danger-text); cursor:pointer; font-size:12px;
         font-weight:700; font-family:inherit; flex-shrink:0; padding:3px 6px; border-radius:5px;
         transition: background .12s ease;
       }
@@ -507,14 +507,14 @@
         background: var(--ia-surface); border:1px solid var(--ia-border); border-radius:9px;
         padding:14px 16px; margin-top:8px; text-align:center; box-shadow: var(--ia-shadow-sm);
       }
-      .stat-big { font-size:25px; font-weight:800; color: var(--ia-primary); letter-spacing:-.2px; }
+      .stat-big { font-size:28.5px; font-weight:800; color: var(--ia-primary); letter-spacing:-.2px; }
       .donut-row { display:flex; gap:16px; align-items:center; }
-      .donut-legend { list-style:none; margin:0; padding:0; font-size:11px; flex:1; }
+      .donut-legend { list-style:none; margin:0; padding:0; font-size:12.5px; flex:1; }
       .donut-legend li { display:flex; align-items:center; gap:6px; margin-bottom:5px; color: var(--ia-text); }
       .dot { width:9px; height:9px; border-radius:2px; display:inline-block; flex-shrink:0; }
       details.contact-full-list { margin-top:10px; border:1px solid var(--ia-border); border-radius:8px; overflow:hidden; }
       details.contact-full-list summary {
-        cursor:pointer; padding:8px 10px; font-size:10.5px; font-weight:700; color: var(--ia-primary); list-style:none;
+        cursor:pointer; padding:8px 10px; font-size:12px; font-weight:700; color: var(--ia-primary); list-style:none;
         text-transform:uppercase; letter-spacing:.3px; background: var(--ia-surface);
       }
       details.contact-full-list summary::-webkit-details-marker { display:none; }
@@ -522,17 +522,17 @@
         list-style:none; margin:0; padding:2px 10px 10px; max-height:180px; overflow-y:auto;
       }
       ul.contact-full-list-items li {
-        display:flex; justify-content:space-between; font-size:11px; padding:5px 0; border-top:1px solid var(--ia-border); color: var(--ia-text);
+        display:flex; justify-content:space-between; font-size:12.5px; padding:5px 0; border-top:1px solid var(--ia-border); color: var(--ia-text);
       }
       ul.contact-full-list-items li:first-child { border-top:none; }
-      .field-hint { font-size:10px; color: var(--ia-muted); margin-top:4px; line-height:1.45; }
+      .field-hint { font-size:11.5px; color: var(--ia-muted); margin-top:4px; line-height:1.45; }
       .stat-inline { display:flex; gap:8px; margin:8px 0 2px; }
       .stat-inline .chip {
         flex:1; text-align:center; background: var(--ia-surface); border:1px solid var(--ia-border);
         border-radius:8px; padding:8px 4px;
       }
-      .stat-inline .chip b { display:block; font-size:16px; color: var(--ia-primary); font-weight:800; }
-      .stat-inline .chip span { font-size:9px; color: var(--ia-muted); text-transform:uppercase; letter-spacing:.3px; }
+      .stat-inline .chip b { display:block; font-size:18.5px; color: var(--ia-primary); font-weight:800; }
+      .stat-inline .chip span { font-size:10.5px; color: var(--ia-muted); text-transform:uppercase; letter-spacing:.3px; }
     </style>
     <button class="toggle" id="ia-toggle" title="InboxSentry">
       <span>IS</span>
@@ -879,7 +879,7 @@
         return `
         <div class="item" data-id="${escapeHtml(f.id)}">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <strong style="font-size:11.5px;">${escapeHtml(f.subject).slice(0, 60)}</strong>
+            <strong style="font-size:13px;">${escapeHtml(f.subject).slice(0, 60)}</strong>
           </div>
           <div class="muted">${f.sender ? escapeHtml(f.sender) + " &middot; " : ""}${pill} &middot; tracked ${new Date(f.trackedAt).toLocaleDateString()}</div>
           <button class="secondary" data-action="open">Open</button>
@@ -1054,7 +1054,7 @@
               : `<span class="pill due">${it.ageDays}d unopened</span>`;
             return `
           <div class="item" data-uid="${escapeHtml(it.uid || "")}" data-idx="${i}">
-            <strong style="font-size:11.5px;">${escapeHtml(it.subject).slice(0, 60)}</strong>
+            <strong style="font-size:13px;">${escapeHtml(it.subject).slice(0, 60)}</strong>
             <div class="muted">${escapeHtml(it.sender)} &middot; ${pill}</div>
             ${it.uid ? '<button class="secondary" data-action="snooze">Snooze 1 day</button>' : ""}
           </div>`;
@@ -1397,8 +1397,8 @@
     return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
       <g transform="rotate(-90 ${cx} ${cy})">${circles}</g>
       <circle cx="${cx}" cy="${cy}" r="${r - thickness / 2 - 3}" fill="${holeColor}"></circle>
-      <text x="${cx}" y="${cy - 3}" text-anchor="middle" font-size="16" font-weight="800" fill="${textColor}">${total}</text>
-      <text x="${cx}" y="${cy + 13}" text-anchor="middle" font-size="8.5" fill="${subTextColor}">emails</text>
+      <text x="${cx}" y="${cy - 3}" text-anchor="middle" font-size="18.5" font-weight="800" fill="${textColor}">${total}</text>
+      <text x="${cx}" y="${cy + 13}" text-anchor="middle" font-size="10" fill="${subTextColor}">emails</text>
     </svg>`;
   }
 
@@ -1529,7 +1529,7 @@
         .slice(0, 8)
         .map(
           (h) => `<div class="item">
-            <strong style="font-size:11.5px;">${h.symbol}${h.cost.toFixed(0)}</strong>
+            <strong style="font-size:13px;">${h.symbol}${h.cost.toFixed(0)}</strong>
             <span class="muted"> &middot; ${h.attendees} attendee(s) &middot; ${h.minutes}min &middot; ${escapeHtml(h.recurrenceLabel)}</span>
             <div class="muted">${new Date(h.ts).toLocaleString()}</div>
           </div>`
@@ -1662,23 +1662,23 @@
   .ia-topbar { height:5px; background:#24408E; }
   .ia-doc { max-width:720px; margin:0 auto; padding:34px 40px 54px; }
   .ia-brand {
-    display:flex; align-items:center; gap:7px; font-size:10.5px; letter-spacing:.09em;
+    display:flex; align-items:center; gap:7px; font-size:12px; letter-spacing:.09em;
     text-transform:uppercase; color:#8892A0; font-weight:700; margin-bottom:20px;
   }
   .ia-brand .dot { width:6px; height:6px; border-radius:50%; background:#24408E; display:inline-block; }
   h1.ia-subject {
-    font-family: Georgia, "Times New Roman", serif; font-size:24px; line-height:1.32;
+    font-family: Georgia, "Times New Roman", serif; font-size:27.5px; line-height:1.32;
     margin:0 0 18px; color:#151A22; font-weight:700;
   }
   .ia-meta-card {
     background:#F5F8FC; border:1px solid #E1E5EA; border-left:3px solid #24408E;
-    border-radius:6px; padding:12px 16px; margin-bottom:28px; font-size:12px; color:#4B5563;
+    border-radius:6px; padding:12px 16px; margin-bottom:28px; font-size:14px; color:#4B5563;
   }
   .ia-meta-card div { margin:2px 0; }
   .ia-meta-card strong { color:#20242B; }
-  .ia-body { font-size:13.5px; line-height:1.75; white-space:pre-wrap; color:#242A33; }
+  .ia-body { font-size:15.5px; line-height:1.75; white-space:pre-wrap; color:#242A33; }
   .ia-footer {
-    margin-top:44px; padding-top:14px; border-top:1px solid #E1E5EA; font-size:10px;
+    margin-top:44px; padding-top:14px; border-top:1px solid #E1E5EA; font-size:11.5px;
     color:#9AA3B0; display:flex; justify-content:space-between; letter-spacing:.02em;
   }
 </style>
@@ -1906,23 +1906,23 @@
     wrap.innerHTML =
       SCHEDULE_PRESETS.map(
         (p) =>
-          `<button data-preset="${p.id}" style="all:initial; cursor:pointer; font-family:inherit; font-size:11px; font-weight:600; color:#24408E; background:#EEF2FB; border:1px solid #C8D3EE; border-radius:6px; padding:4px 10px;">🗓️ ${p.label}</button>`
+          `<button data-preset="${p.id}" style="all:initial; cursor:pointer; font-family:inherit; font-size:12.5px; font-weight:600; color:#24408E; background:#EEF2FB; border:1px solid #C8D3EE; border-radius:6px; padding:4px 10px;">🗓️ ${p.label}</button>`
       ).join("") +
-      `<button data-preset="custom" style="all:initial; cursor:pointer; font-family:inherit; font-size:11px; font-weight:600; color:#24408E; background:#fff; border:1px dashed #24408E; border-radius:6px; padding:4px 10px;">⏱️ Custom…</button>`;
+      `<button data-preset="custom" style="all:initial; cursor:pointer; font-family:inherit; font-size:12.5px; font-weight:600; color:#24408E; background:#fff; border:1px dashed #24408E; border-radius:6px; padding:4px 10px;">⏱️ Custom…</button>`;
 
     // Any date + any minute-precision time — not limited to the three presets.
     const customPanel = document.createElement("span");
     customPanel.style.cssText =
       "all:initial; display:none; align-items:center; gap:6px; margin-top:6px; font-family:'Segoe UI',Arial,sans-serif;";
     customPanel.innerHTML = `
-      <input type="date" min="${todayStr}" style="all:revert; font-size:11px; padding:3px 5px; border:1px solid #C8D3EE; border-radius:5px;" />
-      <input type="time" step="60" style="all:revert; font-size:11px; padding:3px 5px; border:1px solid #C8D3EE; border-radius:5px;" />
-      <button style="all:initial; cursor:pointer; font-family:inherit; font-size:11px; font-weight:600; color:#fff; background:#24408E; border-radius:6px; padding:4px 10px;">Go</button>
+      <input type="date" min="${todayStr}" style="all:revert; font-size:12.5px; padding:3px 5px; border:1px solid #C8D3EE; border-radius:5px;" />
+      <input type="time" step="60" style="all:revert; font-size:12.5px; padding:3px 5px; border:1px solid #C8D3EE; border-radius:5px;" />
+      <button style="all:initial; cursor:pointer; font-family:inherit; font-size:12.5px; font-weight:600; color:#fff; background:#24408E; border-radius:6px; padding:4px 10px;">Go</button>
     `;
 
     const status = document.createElement("span");
     status.style.cssText =
-      "all:initial; display:block; font-family:'Segoe UI',Arial,sans-serif; font-size:10.5px; color:#667085; margin-top:4px; max-width:320px;";
+      "all:initial; display:block; font-family:'Segoe UI',Arial,sans-serif; font-size:12px; color:#667085; margin-top:4px; max-width:320px;";
     container.appendChild(wrap);
     container.appendChild(document.createElement("br"));
     container.appendChild(customPanel);
@@ -2049,7 +2049,7 @@
     el.innerHTML = list
       .map(
         (t, i) => `<div class="item" data-i="${i}">
-          <strong style="font-size:11.5px;">${escapeHtml(t.name)}</strong>
+          <strong style="font-size:13px;">${escapeHtml(t.name)}</strong>
           <div class="muted" style="margin:3px 0 5px; white-space:pre-wrap;">${escapeHtml(t.text).slice(0, 140)}${t.text.length > 140 ? "…" : ""}</div>
           <button class="secondary" data-action="insert">Insert</button>
           <button class="secondary" data-action="copy">Copy</button>
