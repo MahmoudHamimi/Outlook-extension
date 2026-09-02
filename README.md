@@ -14,8 +14,8 @@ the tools below:
 6. **Multi-format export** — PDF and HTML now use a minimalist, professional "letterhead" layout (gradient accent bar, small-caps brand line, serif subject heading, left-accented meta card, footer divider); plus one-click Markdown and plain-text file downloads of the open email, sender included.
 7. **Schedule Send quick-picker** — one-click presets (Tomorrow 8am, Monday 9am, Friday EOD) *plus* a custom date/time picker for any minute of any day — both in the panel and as small pills (with an inline "Custom…" mini-picker) injected next to Outlook's own Send button. Times in the past are always blocked. This one is best-effort/experimental — see "Known limitations" below.
 
-8. **Light / dark theme** — a toggle in the panel header (☾ / ☀) switches the whole panel between a light and dark theme; defaults to your OS/browser preference the first time it runs, then remembers your choice.
-9. **Keyword watch (new in 1.5.0)** — add words or phrases in the "Keywords" tab (e.g. `invoice`, `urgent`); any visible message whose subject or preview text contains one gets a `🔑` badge stamped on the row automatically, the same way Stale and Priority badges work.
+8. **Light / dark theme, density, and free positioning (new in 1.6.0)** — a header toggle (☾ / ☀) switches the whole panel between light and dark; a second toggle (▤) switches between normal and a **compact density** that tightens padding and font-size throughout the panel and nav rail; and the **"IS" launcher button itself is draggable** — press and drag it anywhere on screen to relocate the whole widget, the same way you'd drag any floating chat widget. A quick click still opens/closes the panel as always; only a real drag (a few pixels of movement) moves it, so nothing changes for anyone who just clicks it. All three default sensibly (theme from your OS preference, density to normal, position to bottom-right) and remember your choice after that.
+9. **Keyword watch (new in 1.5.0, match modes added in 1.6.0)** — add words or phrases in the "Keywords" tab (e.g. `invoice`, `urgent`); any visible message whose subject or preview text matches one gets a `🔑` badge stamped on the row automatically, the same way Stale and Priority badges work. Each keyword picks a match mode: **Contains** (substring, the original 1.5.0 behavior — `urgent` also matches `urgently`), **Whole word** (`urgent` only matches on its own), or **Regex** (the keyword text is a case-insensitive regular expression; invalid patterns are rejected with an inline error rather than silently failing).
 10. **Quick reply templates (new in 1.5.0)** — save reusable snippets in the "Compose" tab. Click into a compose field, then hit **Insert** to type the snippet in at your cursor (falls back to copying it to your clipboard if no compose field is focused); **Copy** always just copies.
 11. **Attachment reminder (new in 1.5.0)** — best-effort safety net, on by default (toggle in the "Compose" tab): if your message text mentions "attach…" but no attachment can be found on the compose surface when you hit Send, a single confirmation prompt gives you a chance to double back before it actually sends. It never blocks a send you confirm.
 12. **Email insights (new in 1.5.0)** — the "Insights" tab shows word count, estimated reading time, and link count for whatever's open in the reading pane, refreshing automatically as you switch emails.
@@ -48,6 +48,18 @@ No build step, no bundler — it's loaded exactly as-is.
 
 ## Recent changes
 
+- **1.6.0 — density, drag-to-reposition, keyword match modes, gold accents.**
+  A compact-density toggle (▤) tightens panel padding/font-size for small
+  screens; the "IS" launcher button is now directly draggable — press and
+  move it to relocate the whole widget anywhere on screen (persisted,
+  clamped to stay on-screen) — a quick click still opens/closes the panel
+  as before; keywords now pick a match mode — Contains (the old default),
+  Whole word, or Regex — instead of always doing a plain substring match,
+  with existing keywords upgraded to "Contains" automatically so nothing
+  changes until you opt in. A small amount of gold was added purely as an
+  accent (the logo mark's border, the header's top edge, and the
+  High-priority badge/row signal) — not a palette change, just a
+  highlight on the "this matters" cases.
 - **1.5.0 — five new tools.** Keyword watch (auto-flag rows by subject/preview
   keyword, same mechanism as Priority senders), quick reply templates
   (save-and-insert-at-cursor snippets for compose), an attachment reminder

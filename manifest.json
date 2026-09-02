@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "InboxSentry for Outlook",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Priority & keyword alerts, stale-email flags,meeting cost calculator, templates, attachment reminder & export tools for Outlook",
   "icons": {
     "16": "icon.png",

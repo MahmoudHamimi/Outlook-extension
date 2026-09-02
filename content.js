@@ -55,6 +55,8 @@
     contactsSentStorageKey: "ia_contacts_sent_v1",
     costHistoryStorageKey: "ia_cost_history_v1",
     themeStorageKey: "ia_theme_v1",
+    densityStorageKey: "ia_density_v1",
+    panelPosStorageKey: "ia_panel_pos_v1",
     snoozeStorageKey: "ia_stale_snoozes_v1",
     staleDaysStorageKey: "ia_stale_days_v1",
     // How many days an unread email can sit untouched before we flag it as
@@ -256,6 +258,45 @@
     }
     return best;
   }
+  // Keywords used to be stored as a plain string[]. Upgrade each entry to
+  // {text, mode} the first time the extension runs with the new version —
+  // existing keywords default to "substring" (their old behavior), so
+  // nothing changes for anyone until they explicitly pick a different mode.
+  function migrateKeywordList(list) {
+    return (list || [])
+      .map((k) => {
+        if (typeof k === "string") return { text: k, mode: "substring" };
+        if (k && typeof k.text === "string") return { text: k.text, mode: k.mode || "substring" };
+        return null;
+      })
+      .filter((k) => k && k.text);
+  }
+  // Returns the matching entry (so callers can show which keyword/mode hit)
+  // or null. "substring" is a plain includes(); "whole" requires the match
+  // to sit on a word boundary; "regex" treats the keyword text as a user
+  // regex pattern (case-insensitive), skipped silently if it fails to
+  // compile rather than throwing and breaking the scan for every row.
+  function keywordMatch(haystackLower, keywords) {
+    if (!haystackLower || !keywords || keywords.length === 0) return null;
+    for (const k of keywords) {
+      if (!k || !k.text) continue;
+      if (k.mode === "regex") {
+        try {
+          const re = new RegExp(k.text, "i");
+          if (re.test(haystackLower)) return k;
+        } catch {
+          // invalid pattern — skip rather than throw
+        }
+      } else if (k.mode === "whole") {
+        const escaped = k.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const re = new RegExp("\\b" + escaped + "\\b", "i");
+        if (re.test(haystackLower)) return k;
+      } else {
+        if (haystackLower.includes(k.text)) return k;
+      }
+    }
+    return null;
+  }
 
   /* ============================== SHARED STATE ============================== */
   // Declared up top (rather than inline in each section) so every section can
@@ -268,7 +309,8 @@
   let liveTimerInterval = null;
   let liveStartedAt = null;
   let liveElapsedBeforePause = 0;
-  let keywordCache = []; // [string, ...] lowercase keywords for the Keywords tab
+  let keywordCache = []; // [{text, mode}, ...] lowercase-text keyword entries for the Keywords tab
+                          // mode is one of "substring" | "whole" | "regex"
   let lastComposeField = null; // most recently focused compose contenteditable, for Templates "Insert"
 
   // Injected once into the real page (not the shadow root) so badges we add to
@@ -284,14 +326,15 @@
     .ia-badge-stale-priority { background:#A32C1E; color:#fff; border:1px solid #A32C1E; }
     .ia-badge-priority-normal { background:#EEF2FB; color:#24408E; border:1px solid #C8D3EE; }
     .ia-badge-priority-high {
-      background:#24408E; color:#fff; border:1px solid #24408E;
+      background:#24408E; color:#fff; border:1px solid var(--ia-gold-soft, #D9A441);
+      box-shadow: 0 0 0 1px rgba(184,134,11,.35);
       animation: ia-badge-pulse 2.4s ease-in-out infinite;
     }
     .ia-badge-keyword { background:#2C8C7A; color:#fff; border:1px solid #2C8C7A; }
     /* Flat, business-style side accent instead of a glowing/pulsing wash —
        a thin solid rail is enough signal without feeling like a toy. */
     .ia-row-priority-normal { box-shadow: inset 3px 0 0 #6C86C4 !important; }
-    .ia-row-priority-high { box-shadow: inset 3px 0 0 #24408E !important; }
+    .ia-row-priority-high { box-shadow: inset 3px 0 0 #24408E, inset 0 0 0 1px rgba(184,134,11,.18) !important; }
     @keyframes ia-badge-pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: .72; }
@@ -331,6 +374,24 @@
         --ia-shadow: 0 16px 40px rgba(15,23,41,.18), 0 2px 8px rgba(15,23,41,.08);
         --ia-shadow-sm: 0 1px 2px rgba(15,23,41,.08);
         --ia-focus-ring: 0 0 0 3px rgba(30,58,115,.16);
+        /* Restrained gold accent — used only for High-priority signal and a
+           couple of small decorative touches, never as a base UI color. */
+        --ia-gold: #B8860B;
+        --ia-gold-soft: #D9A441;
+        --ia-gold-tint: #FBF3DF;
+        /* Density: normal by default, tightened by [data-density="compact"]. */
+        --ia-pad-md: 14px;
+        --ia-pad-sm: 10px;
+        --ia-font-base: 13px;
+        --ia-font-sm: 11.5px;
+        --ia-row-gap: 10px;
+      }
+      :host([data-density="compact"]) {
+        --ia-pad-md: 8px;
+        --ia-pad-sm: 6px;
+        --ia-font-base: 11.5px;
+        --ia-font-sm: 10.5px;
+        --ia-row-gap: 6px;
       }
       :host([data-theme="dark"]) {
         --ia-bg: #161A24;
@@ -353,6 +414,9 @@
         --ia-shadow: 0 16px 40px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.3);
         --ia-shadow-sm: 0 1px 2px rgba(0,0,0,.35);
         --ia-focus-ring: 0 0 0 3px rgba(110,147,232,.22);
+        --ia-gold: #D9A441;
+        --ia-gold-soft: #E8C077;
+        --ia-gold-tint: #3A2F14;
       }
       * { box-sizing: border-box; font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "Inter", Arial, sans-serif; }
       ::selection { background: var(--ia-primary-tint); color: var(--ia-primary-dark); }
@@ -362,11 +426,13 @@
         width: 52px; height: 52px; border-radius: 14px;
         background: linear-gradient(155deg, var(--ia-primary-light), var(--ia-primary) 60%, var(--ia-primary-dark));
         color: var(--ia-primary-contrast);
-        border:none; cursor:pointer; box-shadow: var(--ia-shadow); font-size:14px;
+        border:none; cursor:grab; box-shadow: var(--ia-shadow); font-size:14px;
         font-weight:700; position:relative; display:flex; align-items:center; justify-content:center;
         transition: transform .15s ease, box-shadow .15s ease; letter-spacing:.4px;
+        touch-action:none; user-select:none;
       }
-      .toggle:hover { transform: translateY(-1px) scale(1.03); }
+      .toggle:hover { transform: translateY(-1px) scale(1.03); box-shadow: var(--ia-shadow), 0 0 0 3px rgba(184,134,11,.18); }
+      .toggle.dragging { cursor:grabbing; transform: scale(1.06); transition:none; }
       .toggle span:first-child { font-family: Georgia, "Times New Roman", serif; font-size:17px; font-weight:700; }
       .toggle-badge {
         position:absolute; top:-5px; right:-5px; background: var(--ia-danger-text); color:#fff; border-radius:9px;
@@ -374,9 +440,16 @@
         font-size:11px; font-weight:700; padding:0 4px; box-shadow:0 0 0 2.5px var(--ia-bg);
       }
 
-      /* ---- Panel shell ---- */
+      /* ---- Panel shell ----
+         Absolutely positioned relative to the host (not the viewport), and
+         always opens upward from the launcher (bottom:62px puts the panel's
+         bottom edge just above the button) regardless of where the host has
+         been dragged to — so the launcher always ends up at the panel's
+         bottom-right corner, the familiar floating-widget layout. Because
+         the launcher and panel share the same fixed host, dragging the
+         host moves both together with no separate logic needed. */
       .panel {
-        display:none; position:fixed; bottom:82px; right:20px; width:452px; max-height:82vh;
+        display:none; position:absolute; bottom:62px; right:0; width:452px; max-height:82vh;
         background: var(--ia-bg); border-radius:12px; box-shadow: var(--ia-shadow);
         overflow:hidden; flex-direction:column; border:1px solid var(--ia-border); color: var(--ia-text);
       }
@@ -384,19 +457,27 @@
       header {
         background: linear-gradient(120deg, var(--ia-primary-dark), var(--ia-primary) 55%, var(--ia-primary-light));
         color: var(--ia-primary-contrast); position:relative;
-        padding:14px 16px; display:flex; align-items:center; justify-content:space-between; gap:8px;
+        padding: var(--ia-pad-md) 16px; display:flex; align-items:center; justify-content:space-between; gap:8px;
         flex-shrink:0;
       }
       header::after {
         content:""; position:absolute; left:0; right:0; bottom:0; height:3px;
-        background: linear-gradient(90deg, rgba(255,255,255,.55), rgba(255,255,255,0) 60%);
+        background: linear-gradient(90deg, var(--ia-gold-soft) 0%, rgba(255,255,255,.45) 18%, rgba(255,255,255,0) 60%);
       }
       .brand-row { display:flex; align-items:center; gap:10px; min-width:0; }
       .brand-mark {
         width:30px; height:30px; border-radius:8px; flex-shrink:0; display:flex; align-items:center; justify-content:center;
-        background: rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.28);
+        background: rgba(255,255,255,.14); border:1px solid var(--ia-gold-soft);
         font-family: Georgia, "Times New Roman", serif; font-weight:700; font-size:15px; letter-spacing:.2px;
       }
+      .header-actions { display:flex; align-items:center; gap:6px; flex-shrink:0; }
+      .density-toggle {
+        all:initial; cursor:pointer; font-family:inherit; width:27px; height:27px; border-radius:7px;
+        display:flex; align-items:center; justify-content:center; font-size:13px;
+        background: rgba(255,255,255,.14); color: var(--ia-primary-contrast);
+        transition: background .15s ease; border:1px solid rgba(255,255,255,.22);
+      }
+      .density-toggle:hover { background: rgba(255,255,255,.26); }
       header h1 { margin:0; font-size:16.5px; font-weight:700; letter-spacing:.15px; }
       header p { margin:1px 0 0; font-size:11px; opacity:.82; text-transform:uppercase; letter-spacing:.5px; }
       .theme-toggle {
@@ -415,11 +496,13 @@
         overflow-y:auto; padding:6px 0;
       }
       nav button {
-        border:none; background:none; padding:8px 2px; font-size:10.5px; cursor:pointer;
+        border:none; background:none; padding: var(--ia-pad-sm) 2px; font-size:10.5px; cursor:pointer;
         color: var(--ia-muted); white-space:nowrap; position:relative;
         display:flex; flex-direction:column; align-items:center; gap:3px; font-family:inherit; font-weight:600;
         transition: color .12s ease, background .12s ease; border-left:2.5px solid transparent;
       }
+      :host([data-density="compact"]) nav { width:56px; }
+      :host([data-density="compact"]) nav button .nav-icon { font-size:14px; width:22px; height:22px; }
       nav button .nav-icon {
         font-size:17px; line-height:1; width:28px; height:28px; border-radius:7px;
         display:flex; align-items:center; justify-content:center; transition: background .12s ease;
@@ -430,9 +513,10 @@
       }
       nav button.active .nav-icon { background: var(--ia-primary-tint); }
       main {
-        flex:1; min-width:0; padding:14px 16px 16px; overflow-y:auto; font-size:14.5px;
+        flex:1; min-width:0; padding: var(--ia-pad-md) 16px 16px; overflow-y:auto; font-size:14.5px;
         color: var(--ia-text); background: var(--ia-bg);
       }
+      :host([data-density="compact"]) main { font-size:12.5px; }
       main::-webkit-scrollbar, nav::-webkit-scrollbar, ul.contact-full-list-items::-webkit-scrollbar { width:8px; }
       main::-webkit-scrollbar-thumb, nav::-webkit-scrollbar-thumb, ul.contact-full-list-items::-webkit-scrollbar-thumb {
         background: var(--ia-border-strong); border-radius:8px;
@@ -474,7 +558,7 @@
       button.secondary.danger:hover { background: var(--ia-danger-bg); border-color: var(--ia-danger-text); }
 
       .item {
-        border:1px solid var(--ia-border); border-radius:8px; padding:9px 10px; margin-bottom:8px;
+        border:1px solid var(--ia-border); border-radius:8px; padding:9px 10px; margin-bottom: var(--ia-row-gap);
         background: var(--ia-surface); box-shadow: var(--ia-shadow-sm);
       }
       .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:700; letter-spacing:.2px; }
@@ -491,7 +575,7 @@
       .tag-list { list-style:none; margin:8px 0 0; padding:0; }
       .tag-list li {
         display:flex; justify-content:space-between; align-items:center; gap:6px;
-        border:1px solid var(--ia-border); border-radius:7px; padding:6px 9px; margin-bottom:6px; font-size:13px;
+        border:1px solid var(--ia-border); border-radius:7px; padding: var(--ia-pad-sm) 9px; margin-bottom: var(--ia-row-gap); font-size: var(--ia-font-base);
         background: var(--ia-surface); transition: border-color .12s ease;
       }
       .tag-list li:hover { border-color: var(--ia-border-strong); }
@@ -534,7 +618,7 @@
       .stat-inline .chip b { display:block; font-size:18.5px; color: var(--ia-primary); font-weight:800; }
       .stat-inline .chip span { font-size:10.5px; color: var(--ia-muted); text-transform:uppercase; letter-spacing:.3px; }
     </style>
-    <button class="toggle" id="ia-toggle" title="InboxSentry">
+    <button class="toggle" id="ia-toggle" title="InboxSentry — click to open, drag to move">
       <span>IS</span>
       <span class="toggle-badge" id="ia-toggle-badge">0</span>
     </button>
@@ -544,7 +628,10 @@
           <div class="brand-mark">IS</div>
           <div><h1>InboxSentry</h1><p>Inbox Management Suite</p></div>
         </div>
-        <button class="theme-toggle" id="ia-theme-toggle" title="Toggle light / dark theme">◐</button>
+        <div class="header-actions">
+          <button class="density-toggle" id="ia-density-toggle" title="Toggle compact / normal density">▤</button>
+          <button class="theme-toggle" id="ia-theme-toggle" title="Toggle light / dark theme">◐</button>
+        </div>
       </header>
       <div class="panel-body">
       <nav id="ia-tabs">
@@ -722,6 +809,11 @@
           <label>Add a keyword or phrase</label>
           <div class="row-flex">
             <input type="text" id="ia-keyword-input" placeholder="e.g. invoice" />
+            <select id="ia-keyword-mode" style="flex:0 0 118px;" title="Contains: matches anywhere, even inside a word (e.g. 'urgent' also matches 'urgently'). Whole word: only matches 'urgent' on its own. Regex: treat this as a regular expression.">
+              <option value="substring" selected>Contains</option>
+              <option value="whole">Whole word</option>
+              <option value="regex">Regex</option>
+            </select>
             <button class="primary" id="ia-keyword-add" style="margin-top:0;">Add</button>
           </div>
           <ul class="tag-list" id="ia-keyword-list"><li class="empty" style="border:none;">No keywords yet.</li></ul>
@@ -763,7 +855,14 @@
 
   const $ = (sel) => shadow.querySelector(sel);
 
-  $("#ia-toggle").addEventListener("click", () => {
+  const toggleBtn = $("#ia-toggle");
+  let suppressNextToggleClick = false;
+
+  toggleBtn.addEventListener("click", () => {
+    if (suppressNextToggleClick) {
+      suppressNextToggleClick = false;
+      return;
+    }
     $("#ia-panel").classList.toggle("open");
   });
 
@@ -788,6 +887,121 @@
     await storageSet(CONFIG.themeStorageKey, next);
   });
   loadTheme();
+
+  /* ---- Density (normal / compact) ----
+     Shrinks panel padding/font-size for people who want to see more at
+     once. Persisted like the theme; defaults to normal. */
+  function applyDensity(density) {
+    host.setAttribute("data-density", density);
+    const btn = $("#ia-density-toggle");
+    if (btn) btn.title = density === "compact" ? "Switch to normal density" : "Switch to compact density";
+  }
+  async function loadDensity() {
+    const stored = await storageGet(CONFIG.densityStorageKey);
+    applyDensity(stored === "compact" ? "compact" : "normal");
+  }
+  $("#ia-density-toggle").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const current = host.getAttribute("data-density") === "compact" ? "compact" : "normal";
+    const next = current === "compact" ? "normal" : "compact";
+    applyDensity(next);
+    await storageSet(CONFIG.densityStorageKey, next);
+  });
+  loadDensity();
+
+  /* ---- Drag-to-reposition ----
+     The launcher button ("IS") is itself the drag handle — press and hold
+     it, then move, to relocate the whole widget; a plain click (no real
+     movement) still opens/closes the panel as before. This mirrors how
+     floating chat/support widgets on the web are usually draggable, so it
+     doesn't need its own separate control or explanation.
+
+     The host is a fixed-position element normally anchored bottom-right
+     via `bottom`/`right`. Dragging switches it to an explicit `left`/`top`
+     (clamped to stay fully on-screen) and remembers that position across
+     reloads. Because the launcher and the panel are both inside the same
+     fixed host, moving the host moves both together — no separate logic
+     needed to keep the open panel attached to the launcher. */
+  function clampPos(x, y) {
+    const w = host.offsetWidth || 460;
+    const h = host.offsetHeight || 500;
+    const maxX = Math.max(0, window.innerWidth - w);
+    const maxY = Math.max(0, window.innerHeight - h);
+    return { x: Math.min(Math.max(0, x), maxX), y: Math.min(Math.max(0, y), maxY) };
+  }
+  function applyPos(pos) {
+    if (!pos) return;
+    host.style.left = pos.x + "px";
+    host.style.top = pos.y + "px";
+    host.style.right = "auto";
+    host.style.bottom = "auto";
+  }
+  async function loadPanelPos() {
+    const stored = await storageGet(CONFIG.panelPosStorageKey);
+    if (stored && typeof stored.x === "number" && typeof stored.y === "number") {
+      applyPos(clampPos(stored.x, stored.y));
+    }
+  }
+  (function setupToggleDrag() {
+    const DRAG_THRESHOLD = 4; // px of movement before a press counts as a drag rather than a click
+    let dragging = false;
+    let moved = false;
+    let pointerId = null;
+    let startX = 0, startY = 0, originX = 0, originY = 0;
+
+    function onPointerMove(e) {
+      if (!dragging || e.pointerId !== pointerId) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (!moved && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
+        moved = true;
+        toggleBtn.classList.add("dragging");
+        // Once a real drag starts, close the panel if open so the person
+        // can see exactly where the launcher (and panel) will land.
+        $("#ia-panel").classList.remove("open");
+      }
+      if (moved) {
+        const pos = clampPos(originX + dx, originY + dy);
+        applyPos(pos);
+      }
+    }
+    async function onPointerUp(e) {
+      if (!dragging || e.pointerId !== pointerId) return;
+      dragging = false;
+      toggleBtn.classList.remove("dragging");
+      try { toggleBtn.releasePointerCapture(pointerId); } catch {}
+      toggleBtn.removeEventListener("pointermove", onPointerMove);
+      toggleBtn.removeEventListener("pointerup", onPointerUp);
+      toggleBtn.removeEventListener("pointercancel", onPointerUp);
+      if (moved) {
+        const rect = host.getBoundingClientRect();
+        const pos = clampPos(rect.left, rect.top);
+        applyPos(pos);
+        await storageSet(CONFIG.panelPosStorageKey, pos);
+        // The pointerup that ends a drag also fires a click on the same
+        // element right after — suppress just that one so dragging never
+        // also toggles the panel open.
+        suppressNextToggleClick = true;
+      }
+    }
+    toggleBtn.addEventListener("pointerdown", (e) => {
+      // Left click / primary touch only — ignore right-click, etc.
+      if (e.button !== undefined && e.button !== 0) return;
+      dragging = true;
+      moved = false;
+      pointerId = e.pointerId;
+      const rect = host.getBoundingClientRect();
+      originX = rect.left;
+      originY = rect.top;
+      startX = e.clientX;
+      startY = e.clientY;
+      try { toggleBtn.setPointerCapture(pointerId); } catch {}
+      toggleBtn.addEventListener("pointermove", onPointerMove);
+      toggleBtn.addEventListener("pointerup", onPointerUp);
+      toggleBtn.addEventListener("pointercancel", onPointerUp);
+    });
+  })();
+  loadPanelPos();
 
   shadow.querySelectorAll("#ia-tabs button").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -940,7 +1154,8 @@
     priorityCache = migratePriorityList(await storageGet(CONFIG.priorityStorageKey));
   }
   async function refreshKeywordCache() {
-    keywordCache = ((await storageGet(CONFIG.keywordStorageKey)) || []).map((k) => (k || "").toLowerCase()).filter(Boolean);
+    const migrated = migrateKeywordList(await storageGet(CONFIG.keywordStorageKey));
+    keywordCache = migrated.map((k) => ({ text: k.text.toLowerCase(), mode: k.mode }));
   }
   async function refreshSnoozeCache() {
     const stored = (await storageGet(CONFIG.snoozeStorageKey)) || {};
@@ -1001,9 +1216,9 @@
     }
     if (keywordCache.length) {
       const haystack = (row.textContent || "").toLowerCase();
-      const hit = keywordCache.find((k) => k && haystack.includes(k));
+      const hit = keywordMatch(haystack, keywordCache);
       if (hit) {
-        badges.push(`<span class="ia-badge ia-badge-keyword" title="Matched keyword: ${escapeHtml(hit)}">🔑 ${escapeHtml(hit)}</span>`);
+        badges.push(`<span class="ia-badge ia-badge-keyword" title="Matched keyword (${escapeHtml(hit.mode)}): ${escapeHtml(hit.text)}">🔑 ${escapeHtml(hit.text)}</span>`);
       }
     }
     if (badges.length) {
@@ -1236,20 +1451,21 @@
      keywordCache, so this section is just the storage + tab UI.
      ========================================================= */
   async function getKeywords() {
-    return (await storageGet(CONFIG.keywordStorageKey)) || [];
+    return migrateKeywordList(await storageGet(CONFIG.keywordStorageKey));
   }
   async function saveKeywords(list) {
     await storageSet(CONFIG.keywordStorageKey, list);
     await refreshKeywordCache();
     scanMailList();
   }
+  const KEYWORD_MODE_LABEL = { substring: "Contains", whole: "Whole word", regex: "Regex" };
   async function countKeywordMatchesInView() {
     if (!keywordCache.length) return 0;
     const container = qFirst(CONFIG.mailListContainerSelectors) || document.body;
     const rows = qAllVisible(CONFIG.mailListItemSelectors, container);
     return rows.filter((r) => {
       const haystack = (r.textContent || "").toLowerCase();
-      return keywordCache.some((k) => k && haystack.includes(k));
+      return !!keywordMatch(haystack, keywordCache);
     }).length;
   }
   async function renderKeywordList() {
@@ -1266,7 +1482,7 @@
     el.innerHTML = list
       .map(
         (k, i) => `<li data-i="${i}">
-          <span class="tag-left"><span class="name">${escapeHtml(k)}</span></span>
+          <span class="tag-left"><span class="name">${escapeHtml(k.text)}</span><span class="pill normal" style="flex-shrink:0;">${escapeHtml(KEYWORD_MODE_LABEL[k.mode] || "Contains")}</span></span>
           <button data-action="remove">Remove</button>
         </li>`
       )
@@ -1285,11 +1501,24 @@
   }
   $("#ia-keyword-add").addEventListener("click", async () => {
     const input = $("#ia-keyword-input");
+    const modeSelect = $("#ia-keyword-mode");
     const v = (input.value || "").trim();
     if (!v) return;
+    const mode = (modeSelect && modeSelect.value) || "substring";
+    if (mode === "regex") {
+      try {
+        new RegExp(v, "i");
+      } catch {
+        input.style.borderColor = "var(--ia-danger-text)";
+        input.title = "Not a valid regular expression";
+        return;
+      }
+    }
+    input.style.borderColor = "";
+    input.title = "";
     const cur = await getKeywords();
-    if (!cur.some((k) => k.toLowerCase() === v.toLowerCase())) {
-      cur.push(v);
+    if (!cur.some((k) => k.text.toLowerCase() === v.toLowerCase() && k.mode === mode)) {
+      cur.push({ text: v, mode });
       await saveKeywords(cur);
     }
     input.value = "";
